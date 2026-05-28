@@ -40,6 +40,7 @@ wss.on('connection', (ws) => {
                     seq: 1,
                     clientSeq: request.seq,
                     id: request.id,
+                    status: 200,
                     parameters: {
                         media: [
                             {
