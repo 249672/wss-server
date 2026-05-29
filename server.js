@@ -39,15 +39,15 @@ wss.on('connection', (ws) => {
                     clientSeq: request.seq,    // References the incoming open request tracking ID
                     id: request.id,
                     status: 200,
-                    startPaused: false,        // SPEC FIX: Enforced at the ROOT level, not inside parameters
                     parameters: {
+                        startPaused: false,        // SPEC FIX: Enforced at the ROOT level, not inside parameters
                         media: [
                             {
                                 type: 'audio',
                                 format: 'PCMU',
-                                channels: ['external'],
+                                channels: ['external', 'internal'], // SPEC FIX: Explicitly define channel layout for clarity
                                 rate: 8000,       // SPEC FIX: Must be typed as a strict raw integer
-                                channelCount: 1   // SPEC FIX: Mandatory property layout flag
+                                //channelCount: 1   // SPEC FIX: Mandatory property layout flag
                             }
                         ]
                     }
