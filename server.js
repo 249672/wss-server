@@ -1,13 +1,14 @@
 const { WebSocketServer } = require('ws');
 const http = require('http');
 
+// Render sets the web environment port dynamically via process.env.PORT
 const port = process.env.PORT || 8080; 
 
-// Maintain the Render Infrastructure Router Health Checks
+// 1. Maintain the Render Infrastructure Web Router Health Check
 const server = http.createServer((req, res) => {
     if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Genesys Cloud AudioHook Production Gateway Online');
+        res.end('Genesys Cloud AudioHook Blueprint Service Online');
     } else {
         res.writeHead(404);
         res.end();
@@ -20,68 +21,69 @@ wss.on('connection', (ws) => {
     console.log('[Handshake] Genesys socket connection channel established.');
 
     ws.on('message', (message, isBinary) => {
+        // Skip processing streaming binary voice data chunks
         if (isBinary) {
-            return; // Raw binary audio bytes pass here during the streaming session
+            return; 
         }
 
         try {
             const request = JSON.parse(message.toString());
             console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2));
 
-            // STEP 1: COMPLIANT OPEN PROBE RESPONSE
+            // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" BLUEPRINT
             if (request.type === 'open') {
                 const response = {
                     version: request.version,
                     type: 'opened',
+                    seq: 1,
+                    clientseq: request.seq, // MATCHING BLUEPRINT: All lowercase 'clientseq'
                     id: request.id,
-                    seq: 1,                    // Spec Requirement: Server index starts at 1
-                    clientSeq: request.seq,    // References incoming request seq tracker
-                    serverseq: 0,              // CRITICAL PROBE FIX: Must be explicitly passed at root
                     parameters: {
+                        startPaused: false, // MATCHING BLUEPRINT: Inside parameters block
                         media: [
                             {
                                 type: 'audio',
                                 format: 'PCMU',
-                                channels: ['external', 'internal'], // CRITICAL PROBE FIX: Must match incoming spec array
+                                channels: ['external', 'internal'], // MATCHING BLUEPRINT: Array parameters
                                 rate: 8000
                             }
                         ]
                     }
                 };
+                
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
-                console.log(`[Handshake OK] Sent matching response frame layout for ID: ${request.id}`);
+                console.log(`[Handshake OK] Blueprint matched and sent for ID: ${request.id}`);
             } 
             
-            // STEP 2: COMPLIANT CLOSE RESPONSE
+            // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE
             else if (request.type === 'close') {
                 const response = {
                     version: request.version,
                     type: 'closed',
-                    id: request.id,
-                    seq: 2,                    // Increments server response sequence counter
-                    clientSeq: request.seq,    
-                    serverseq: 0               // Enforces protocol sequence state limits
+                    seq: 2,
+                    clientseq: request.seq,
+                    id: request.id
                 };
                 ws.send(JSON.stringify(response));
-                console.log(`[Handshake Ended] Sent closed confirmation payload frame for ID: ${request.id}`);
+                console.log(`[Handshake Ended] Sent close acknowledgement for ID: ${request.id}`);
                 ws.close(1000); 
             }
 
-            // STEP 3: KEEPALIVE TIMEOUT RESPONSES
+            // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE
             else if (request.type === 'ping') {
                 const response = {
                     version: request.version,
                     type: 'pong',
-                    id: request.id,
                     seq: request.seq,
-                    clientSeq: request.seq,
-                    serverseq: 0
+                    clientseq: request.seq,
+                    id: request.id
                 };
                 ws.send(JSON.stringify(response));
             }
 
         } catch (err) {
-            console.error('[Structural Error] Parsing exception caught:', err.message);
+            console.error('[Structural Error] Blueprint schema violation caught:', err.message);
         }
     });
 
