@@ -61,14 +61,14 @@ wss.on('connection', (ws) => {
             else if (request.type === 'paused') {
                 const response = {
                     version: request.version,
-                    type: 'paused',           // Confirms structural type
-                    seq: 2,                  // SPEC FIX: Sequential response mapping
+                    type: 'paused',
+                    seq: 2,
                     clientseq: request.seq,
                     id: request.id
                 };
                 console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
-                console.log(`⏸️ [Session Paused] Call state changed to paused for ID: ${request.id}`);
+                console.log(`\u23F8\uFE0F [Session Paused] Call state changed to paused for ID: ${request.id}`);
             }
 
             // STEP A-3: SPECS RESUMED HANDSHAKE (Fixed: Correct sequence index tracking)
@@ -76,15 +76,14 @@ wss.on('connection', (ws) => {
                 const response = {
                     version: request.version,
                     type: 'resumed',
-                    seq: 2,                  // SPEC FIX: Sequential response mapping
+                    seq: 2,
                     clientseq: request.seq,
                     id: request.id
                 };
                 console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
-                console.log(`▶️ [Session Resumed] Call state changed to streaming for ID: ${request.id}`);
+                console.log(`\u25B6\uFE0F [Session Resumed] Call state changed to streaming for ID: ${request.id}`);
             }
-
 
             // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE
             else if (request.type === 'close') {
