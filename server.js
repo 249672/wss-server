@@ -57,31 +57,34 @@ wss.on('connection', (ws) => {
                 console.log(`[Handshake OK] ID: ${request.id}`);
             } 
             
-            // STEP A-2: SPECS PAUSED HANDSHAKE (Prevents early drop on transfers or hold actions)
+            // STEP A-2: SPECS PAUSED HANDSHAKE (Fixed: Correct sequence index tracking)
             else if (request.type === 'paused') {
                 const response = {
                     version: request.version,
-                    type: 'paused',
-                    seq: request.seq,
+                    type: 'paused',           // Confirms structural type
+                    seq: 2,                  // SPEC FIX: Sequential response mapping
                     clientseq: request.seq,
                     id: request.id
                 };
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
                 console.log(`⏸️ [Session Paused] Call state changed to paused for ID: ${request.id}`);
             }
 
-            // STEP A-3: SPECS RESUMED HANDSHAKE (Triggers when agent/customer comes off hold)
+            // STEP A-3: SPECS RESUMED HANDSHAKE (Fixed: Correct sequence index tracking)
             else if (request.type === 'resumed') {
                 const response = {
                     version: request.version,
                     type: 'resumed',
-                    seq: request.seq,
+                    seq: 2,                  // SPEC FIX: Sequential response mapping
                     clientseq: request.seq,
                     id: request.id
                 };
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
                 console.log(`▶️ [Session Resumed] Call state changed to streaming for ID: ${request.id}`);
             }
+
 
             // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE
             else if (request.type === 'close') {
