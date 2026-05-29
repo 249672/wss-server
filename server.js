@@ -1,14 +1,13 @@
 const { WebSocketServer } = require('ws');
 const http = require('http');
 
-// Render maps your system port variable configurations dynamically
 const port = process.env.PORT || 8080; 
 
-// Maintain the Render Router Infrastructure Health check
+// Maintain the Render Infrastructure Router Health Checks
 const server = http.createServer((req, res) => {
     if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Genesys Cloud AudioHook Gateway Active');
+        res.end('Genesys Cloud AudioHook Production Gateway Online');
     } else {
         res.writeHead(404);
         res.end();
@@ -21,71 +20,68 @@ wss.on('connection', (ws) => {
     console.log('[Handshake] Genesys socket connection channel established.');
 
     ws.on('message', (message, isBinary) => {
-        // Safely pass streaming binary audio packets during the handshake
         if (isBinary) {
-            return; 
+            return; // Raw binary audio bytes pass here during the streaming session
         }
 
         try {
             const request = JSON.parse(message.toString());
             console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2));
-            console.log(`[Protocol Incoming] Event Type Received: ${request.type}`);
 
-            // STEP 1: SPEC-COMPLIANT OPEN HANDSHAKE
+            // STEP 1: COMPLIANT OPEN PROBE RESPONSE
             if (request.type === 'open') {
                 const response = {
                     version: request.version,
                     type: 'opened',
-                    seq: 1,                    // Spec Requirement: Server sequence initialized at 1
-                    clientSeq: request.seq,    // References the incoming open request tracking ID
                     id: request.id,
-                    //status: 200,
+                    seq: 1,                    // Spec Requirement: Server index starts at 1
+                    clientSeq: request.seq,    // References incoming request seq tracker
+                    serverseq: 0,              // CRITICAL PROBE FIX: Must be explicitly passed at root
                     parameters: {
-                        startPaused: false,        // SPEC FIX: Enforced at the ROOT level, not inside parameters
                         media: [
                             {
                                 type: 'audio',
                                 format: 'PCMU',
-                                channels: ['external', 'internal'], // SPEC FIX: Explicitly define channel layout for clarity
-                                rate: 8000,       // SPEC FIX: Must be typed as a strict raw integer
-                                //channelCount: 1   // SPEC FIX: Mandatory property layout flag
+                                channels: ['external', 'internal'], // CRITICAL PROBE FIX: Must match incoming spec array
+                                rate: 8000
                             }
                         ]
                     }
                 };
                 ws.send(JSON.stringify(response));
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
-                console.log(`[Handshake OK] Sent "opened" frame payload for ID: ${request.id}`);
+                console.log(`[Handshake OK] Sent matching response frame layout for ID: ${request.id}`);
             } 
             
-            // STEP 2: SPEC-COMPLIANT PROBE CLOSE ACKNOWLEDGMENT
+            // STEP 2: COMPLIANT CLOSE RESPONSE
             else if (request.type === 'close') {
                 const response = {
                     version: request.version,
                     type: 'closed',
-                    seq: 2,                    // Incremented message counter tracking ID
-                    clientSeq: request.seq,
-                    id: request.id
+                    id: request.id,
+                    seq: 2,                    // Increments server response sequence counter
+                    clientSeq: request.seq,    
+                    serverseq: 0               // Enforces protocol sequence state limits
                 };
                 ws.send(JSON.stringify(response));
-                console.log(`[Handshake Ended] Sent "closed" frame response context for ID: ${request.id}`);
+                console.log(`[Handshake Ended] Sent closed confirmation payload frame for ID: ${request.id}`);
                 ws.close(1000); 
             }
 
-            // STEP 3: KEEPALIVE TIMEOUT IMMUNIZATION 
+            // STEP 3: KEEPALIVE TIMEOUT RESPONSES
             else if (request.type === 'ping') {
                 const response = {
                     version: request.version,
                     type: 'pong',
+                    id: request.id,
                     seq: request.seq,
                     clientSeq: request.seq,
-                    id: request.id
+                    serverseq: 0
                 };
                 ws.send(JSON.stringify(response));
             }
 
         } catch (err) {
-            console.error('[Structural Error] Malformed parsing dropped:', err.message);
+            console.error('[Structural Error] Parsing exception caught:', err.message);
         }
     });
 
