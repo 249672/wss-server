@@ -28,7 +28,7 @@ wss.on('connection', (ws) => {
 
         try {
             const request = JSON.parse(message.toString());
-            console.log(`request: ${request}`);
+            console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2));
             console.log(`[Protocol Incoming] Event Type Received: ${request.type}`);
 
             // STEP 1: SPEC-COMPLIANT OPEN HANDSHAKE
