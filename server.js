@@ -39,7 +39,7 @@ wss.on('connection', (ws) => {
                     seq: 1,                    // Spec Requirement: Server sequence initialized at 1
                     clientSeq: request.seq,    // References the incoming open request tracking ID
                     id: request.id,
-                    status: 200,
+                    //status: 200,
                     parameters: {
                         startPaused: false,        // SPEC FIX: Enforced at the ROOT level, not inside parameters
                         media: [
