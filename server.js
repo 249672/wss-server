@@ -1,30 +1,28 @@
 const { WebSocketServer } = require('ws');
 const http = require('http');
 
-// Render sets the execution port dynamically via environment variables
+// Render sets the web environment port dynamically
 const port = process.env.PORT || 8080; 
 
-// 1. HTTP Server to handle Render Health Monitoring Checks
+// 1. Maintain the Render Web Routing Infrastructure Health Probe
 const server = http.createServer((req, res) => {
     if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Genesys AudioHook Protocol Server: ONLINE & SECURE');
+        res.end('Genesys AudioHook Production Gateway Online');
     } else {
         res.writeHead(404);
         res.end();
     }
 });
 
-// 2. Attach WebSocket Listener Engine
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
     console.log('[Handshake] Genesys socket connection channel established.');
 
     ws.on('message', (message, isBinary) => {
-        // Handle raw audio transport bytes safely
+        // Bypass streaming media blocks (Audio bytes loop here during live call)
         if (isBinary) {
-            // Raw PCMU binary packets stream here during an active call session
             return; 
         }
 
@@ -32,18 +30,17 @@ wss.on('connection', (ws) => {
             const request = JSON.parse(message.toString());
             console.log(`[Protocol Incoming] Event Type Received: ${request.type}`);
 
-            // STEP A: COMPLIANT OPEN PROBE HANDSHAKE
+            // STEP A: SPEC-COMPLIANT OPEN HANDSHAKE
             if (request.type === 'open') {
                 const response = {
                     version: request.version,
                     type: 'opened',
-                    seq: 1,
-                    clientSeq: request.seq,    // Exact attribute name matching standard spec rules
-                    clientseq: request.seq,    // Fallback redundancy matching legacy forum targets
+                    seq: request.seq + 1,      // SPEC REQ: Must increment incoming seq 
+                    clientSeq: request.seq,    // Matches standard platform key casing
                     id: request.id,
-                    status: 200,               // Standard execution status check code
+                    status: 200,
                     parameters: {
-                        startPaused: false,
+                        startPaused: false,    // SPEC REQ: Tells Genesys to start recording stream instantly
                         media: [
                             {
                                 type: 'audio',
@@ -58,29 +55,27 @@ wss.on('connection', (ws) => {
                 console.log(`[Handshake OK] Sent "opened" frame payload verification for ID: ${request.id}`);
             } 
             
-            // STEP B: COMPLIANT PROBE CLOSE ACKNOWLEDGMENT
+            // STEP B: SPEC-COMPLIANT CLOSE ACKNOWLEDGMENT
             else if (request.type === 'close') {
                 const response = {
                     version: request.version,
                     type: 'closed',
-                    seq: request.seq + 1,
+                    seq: request.seq + 1,      // SPEC REQ: Must increment incoming close seq
                     clientSeq: request.seq,
-                    clientseq: request.seq,
                     id: request.id
                 };
                 ws.send(JSON.stringify(response));
                 console.log(`[Handshake Ended] Sent "closed" frame response context for ID: ${request.id}`);
-                ws.close(1000); // Trigger clean infrastructure websocket disconnect state
+                ws.close(1000); 
             }
 
-            // STEP C: KEEPALIVE LIFELINE PROBE
+            // STEP C: KEEPALIVE LIFELINE RESPONSE
             else if (request.type === 'ping') {
                 const response = {
                     version: request.version,
                     type: 'pong',
-                    seq: request.seq,
+                    seq: request.seq + 1,
                     clientSeq: request.seq,
-                    clientseq: request.seq,
                     id: request.id
                 };
                 ws.send(JSON.stringify(response));
@@ -100,7 +95,6 @@ wss.on('connection', (ws) => {
     });
 });
 
-// 3. Launch App Event Loop Listener
 server.listen(port, () => {
     console.log(`Application successfully listening for incoming traffic on port ${port}`);
 });
