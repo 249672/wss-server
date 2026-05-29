@@ -4,7 +4,7 @@ const http = require('http');
 // Render sets the environment port dynamically 
 const port = process.env.PORT || 8080; 
 
-// 1. HTTP Infrastructure Layer to serve Render Router Health Check Probes
+// Maintain the Render Router Health Check Probes
 const server = http.createServer((req, res) => {
     if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -21,47 +21,48 @@ wss.on('connection', (ws) => {
     console.log('[Handshake] Genesys socket connection channel established.');
 
     ws.on('message', (message, isBinary) => {
-        // Handle streaming media blocks (Audio bytes stream here during active call sessions)
         if (isBinary) {
-            return; 
+            return; // Ignore raw streaming audio bytes during the connection probe
         }
 
         try {
             const request = JSON.parse(message.toString());
             console.log(`[Protocol Incoming] Event Type Received: ${request.type}`);
 
-            // STEP A: OFFICIAL COMPLIANT OPEN HANDSHAKE MATRIX
+            // 1. STRICT COMPLIANT OPEN HANDSHAKE
             if (request.type === 'open') {
                 const response = {
                     version: request.version,
                     type: 'opened',
-                    seq: 1,                    // SPEC REQ: Server initialization tracker begins at 1
-                    clientSeq: request.seq,    // SPEC REQ: Directly references the request seq value
+                    seq: 1,                    // Spec: Server's first message tracking starts at 1
+                    clientSeq: request.seq,    // Spec: Links directly back to incoming request seq
                     id: request.id,
-                    status: 200,               // SPEC REQ: Enforces status handshake execution boundaries
+                    status: 200,
+                    // FIX: startPaused must live at the message ROOT level, not inside parameters!
+                    startPaused: false,        
                     parameters: {
-                        startPaused: false,
                         media: [
                             {
                                 type: 'audio',
                                 format: 'PCMU',
                                 channels: ['external'],
-                                rate: 8000
+                                rate: 8000,
+                                channelCount: 1 // FIX: Required by the AudioHook specification matrix
                             }
                         ]
                     }
                 };
                 ws.send(JSON.stringify(response));
-                console.log(`[Handshake OK] Sent "opened" frame payload verification for ID: ${request.id}`);
+                console.log(`[Handshake OK] Sent "opened" frame payload for ID: ${request.id}`);
             } 
             
-            // STEP B: OFFICIAL COMPLIANT PROBE CLOSE HANDSHAKE
+            // 2. STRICT COMPLIANT CLOSE ACKNOWLEDGMENT
             else if (request.type === 'close') {
                 const response = {
                     version: request.version,
                     type: 'closed',
-                    seq: 2,                    // SPEC REQ: Server close transaction incremented sequence tracking
-                    clientSeq: request.seq,    // References the incoming close seq property
+                    seq: 2,                    // Spec: Sequential message tracker incremented
+                    clientSeq: request.seq,
                     id: request.id
                 };
                 ws.send(JSON.stringify(response));
@@ -69,7 +70,7 @@ wss.on('connection', (ws) => {
                 ws.close(1000); 
             }
 
-            // STEP C: KEEPALIVE LIFELINE ALIGNMENT
+            // 3. LIFELINE KEEPALIVE PING/PONG
             else if (request.type === 'ping') {
                 const response = {
                     version: request.version,
@@ -82,7 +83,7 @@ wss.on('connection', (ws) => {
             }
 
         } catch (err) {
-            console.error('[Structural Error] Malformed JSON structure dropped:', err.message);
+            console.error('[Structural Error] Malformed parsing dropped:', err.message);
         }
     });
 
