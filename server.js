@@ -1,10 +1,10 @@
 const { WebSocketServer } = require('ws');
 const http = require('http');
 
-// Render sets the environment port dynamically 
+// Render maps your system port variable configurations dynamically
 const port = process.env.PORT || 8080; 
 
-// Maintain the Render Router Health Check Probes
+// Maintain the Render Router Infrastructure Health check
 const server = http.createServer((req, res) => {
     if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -21,33 +21,33 @@ wss.on('connection', (ws) => {
     console.log('[Handshake] Genesys socket connection channel established.');
 
     ws.on('message', (message, isBinary) => {
+        // Safely pass streaming binary audio packets during the handshake
         if (isBinary) {
-            return; // Ignore raw streaming audio bytes during the connection probe
+            return; 
         }
 
         try {
             const request = JSON.parse(message.toString());
             console.log(`[Protocol Incoming] Event Type Received: ${request.type}`);
 
-            // 1. STRICT COMPLIANT OPEN HANDSHAKE
+            // STEP 1: SPEC-COMPLIANT OPEN HANDSHAKE
             if (request.type === 'open') {
                 const response = {
                     version: request.version,
                     type: 'opened',
-                    seq: 1,                    // Spec: Server's first message tracking starts at 1
-                    clientSeq: request.seq,    // Spec: Links directly back to incoming request seq
+                    seq: 1,                    // Spec Requirement: Server sequence initialized at 1
+                    clientSeq: request.seq,    // References the incoming open request tracking ID
                     id: request.id,
                     status: 200,
-                    // FIX: startPaused must live at the message ROOT level, not inside parameters!
-                    startPaused: false,        
+                    startPaused: false,        // SPEC FIX: Enforced at the ROOT level, not inside parameters
                     parameters: {
                         media: [
                             {
                                 type: 'audio',
                                 format: 'PCMU',
                                 channels: ['external'],
-                                rate: 8000,
-                                channelCount: 1 // FIX: Required by the AudioHook specification matrix
+                                rate: 8000,       // SPEC FIX: Must be typed as a strict raw integer
+                                channelCount: 1   // SPEC FIX: Mandatory property layout flag
                             }
                         ]
                     }
@@ -56,12 +56,12 @@ wss.on('connection', (ws) => {
                 console.log(`[Handshake OK] Sent "opened" frame payload for ID: ${request.id}`);
             } 
             
-            // 2. STRICT COMPLIANT CLOSE ACKNOWLEDGMENT
+            // STEP 2: SPEC-COMPLIANT PROBE CLOSE ACKNOWLEDGMENT
             else if (request.type === 'close') {
                 const response = {
                     version: request.version,
                     type: 'closed',
-                    seq: 2,                    // Spec: Sequential message tracker incremented
+                    seq: 2,                    // Incremented message counter tracking ID
                     clientSeq: request.seq,
                     id: request.id
                 };
@@ -70,7 +70,7 @@ wss.on('connection', (ws) => {
                 ws.close(1000); 
             }
 
-            // 3. LIFELINE KEEPALIVE PING/PONG
+            // STEP 3: KEEPALIVE TIMEOUT IMMUNIZATION 
             else if (request.type === 'ping') {
                 const response = {
                     version: request.version,
