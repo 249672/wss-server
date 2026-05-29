@@ -8,7 +8,7 @@ const port = process.env.PORT || 8080;
 const server = http.createServer((req, res) => {
     if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Genesys Cloud AudioHook Blueprint Service Online');
+        res.end('Genesys Cloud AudioHook Service Online');
     } else {
         res.writeHead(404);
         res.end();
@@ -30,21 +30,21 @@ wss.on('connection', (ws) => {
             const request = JSON.parse(message.toString());
             console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2));
 
-            // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" BLUEPRINT
+            // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" 
             if (request.type === 'open') {
                 const response = {
                     version: request.version,
                     type: 'opened',
                     seq: 1,
-                    clientseq: request.seq, // MATCHING BLUEPRINT: All lowercase 'clientseq'
+                    clientseq: request.seq, 
                     id: request.id,
                     parameters: {
-                        startPaused: false, // MATCHING BLUEPRINT: Inside parameters block
+                        startPaused: false, 
                         media: [
                             {
                                 type: 'audio',
                                 format: 'PCMU',
-                                channels: ['external', 'internal'], // MATCHING BLUEPRINT: Array parameters
+                                channels: ['external', 'internal'], 
                                 rate: 8000
                             }
                         ]
@@ -53,7 +53,7 @@ wss.on('connection', (ws) => {
                 
                 console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
-                console.log(`[Handshake OK] Blueprint matched and sent for ID: ${request.id}`);
+                console.log(`[Handshake OK]  ID: ${request.id}`);
             } 
             
             // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE
@@ -83,7 +83,7 @@ wss.on('connection', (ws) => {
             }
 
         } catch (err) {
-            console.error('[Structural Error] Blueprint schema violation caught:', err.message);
+            console.error('[Structural Error] schema violation caught:', err.message);
         }
     });
 
