@@ -21,55 +21,82 @@ wss.on('connection', (ws) => {
     console.log('[Handshake] Genesys socket connection channel established.');
 
     ws.on('message', (message, isBinary) => {
-        // Skip processing streaming binary voice data chunks
+        // Process streaming binary voice data chunks during an active conversation
         if (isBinary) {
-            return; 
+            console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`);
+            // Raw PCMU μ-law bytes land here every 20ms and are ready for transcription or recording
+            return;
         }
 
         try {
             const request = JSON.parse(message.toString());
             console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2));
 
-            // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" 
+            // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN"
             if (request.type === 'open') {
                 const response = {
                     version: request.version,
                     type: 'opened',
                     seq: 1,
-                    clientseq: request.seq, 
+                    clientseq: request.seq,
                     id: request.id,
                     parameters: {
-                        startPaused: false, 
+                        startPaused: false,
                         media: [
                             {
                                 type: 'audio',
                                 format: 'PCMU',
-                                channels: ['external', 'internal'], 
+                                channels: ['external', 'internal'],
                                 rate: 8000
                             }
                         ]
                     }
                 };
-                
                 console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
-                console.log(`[Handshake OK]  ID: ${request.id}`);
+                console.log(`[Handshake OK] ID: ${request.id}`);
             } 
             
+            // STEP A-2: SPECS PAUSED HANDSHAKE (Prevents early drop on transfers or hold actions)
+            else if (request.type === 'paused') {
+                const response = {
+                    version: request.version,
+                    type: 'paused',
+                    seq: request.seq,
+                    clientseq: request.seq,
+                    id: request.id
+                };
+                ws.send(JSON.stringify(response));
+                console.log(`⏸️ [Session Paused] Call state changed to paused for ID: ${request.id}`);
+            }
+
+            // STEP A-3: SPECS RESUMED HANDSHAKE (Triggers when agent/customer comes off hold)
+            else if (request.type === 'resumed') {
+                const response = {
+                    version: request.version,
+                    type: 'resumed',
+                    seq: request.seq,
+                    clientseq: request.seq,
+                    id: request.id
+                };
+                ws.send(JSON.stringify(response));
+                console.log(`▶️ [Session Resumed] Call state changed to streaming for ID: ${request.id}`);
+            }
+
             // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE
             else if (request.type === 'close') {
                 const response = {
                     version: request.version,
                     type: 'closed',
-                    seq: 2,
+                    seq: request.seq + 1,
                     clientseq: request.seq,
                     id: request.id
                 };
                 ws.send(JSON.stringify(response));
                 console.log(`[Handshake Ended] Sent close acknowledgement for ID: ${request.id}`);
-                ws.close(1000); 
-            }
-
+                ws.close(1000);
+            } 
+            
             // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE
             else if (request.type === 'ping') {
                 const response = {
