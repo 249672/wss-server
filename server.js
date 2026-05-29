@@ -54,6 +54,7 @@ wss.on('connection', (ws) => {
                     }
                 };
                 ws.send(JSON.stringify(response));
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 console.log(`[Handshake OK] Sent "opened" frame payload for ID: ${request.id}`);
             } 
             
