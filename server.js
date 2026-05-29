@@ -1,14 +1,14 @@
 const { WebSocketServer } = require('ws');
 const http = require('http');
 
-// Render sets the web environment port dynamically
+// Render sets the environment port dynamically 
 const port = process.env.PORT || 8080; 
 
-// 1. Maintain the Render Web Routing Infrastructure Health Probe
+// 1. HTTP Infrastructure Layer to serve Render Router Health Check Probes
 const server = http.createServer((req, res) => {
     if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Genesys AudioHook Production Gateway Online');
+        res.end('Genesys Cloud AudioHook Gateway Active');
     } else {
         res.writeHead(404);
         res.end();
@@ -21,7 +21,7 @@ wss.on('connection', (ws) => {
     console.log('[Handshake] Genesys socket connection channel established.');
 
     ws.on('message', (message, isBinary) => {
-        // Bypass streaming media blocks (Audio bytes loop here during live call)
+        // Handle streaming media blocks (Audio bytes stream here during active call sessions)
         if (isBinary) {
             return; 
         }
@@ -30,17 +30,17 @@ wss.on('connection', (ws) => {
             const request = JSON.parse(message.toString());
             console.log(`[Protocol Incoming] Event Type Received: ${request.type}`);
 
-            // STEP A: SPEC-COMPLIANT OPEN HANDSHAKE
+            // STEP A: OFFICIAL COMPLIANT OPEN HANDSHAKE MATRIX
             if (request.type === 'open') {
                 const response = {
                     version: request.version,
                     type: 'opened',
-                    seq: request.seq + 1,      // SPEC REQ: Must increment incoming seq 
-                    clientSeq: request.seq,    // Matches standard platform key casing
+                    seq: 1,                    // SPEC REQ: Server initialization tracker begins at 1
+                    clientSeq: request.seq,    // SPEC REQ: Directly references the request seq value
                     id: request.id,
-                    status: 200,
+                    status: 200,               // SPEC REQ: Enforces status handshake execution boundaries
                     parameters: {
-                        startPaused: false,    // SPEC REQ: Tells Genesys to start recording stream instantly
+                        startPaused: false,
                         media: [
                             {
                                 type: 'audio',
@@ -55,13 +55,13 @@ wss.on('connection', (ws) => {
                 console.log(`[Handshake OK] Sent "opened" frame payload verification for ID: ${request.id}`);
             } 
             
-            // STEP B: SPEC-COMPLIANT CLOSE ACKNOWLEDGMENT
+            // STEP B: OFFICIAL COMPLIANT PROBE CLOSE HANDSHAKE
             else if (request.type === 'close') {
                 const response = {
                     version: request.version,
                     type: 'closed',
-                    seq: request.seq + 1,      // SPEC REQ: Must increment incoming close seq
-                    clientSeq: request.seq,
+                    seq: 2,                    // SPEC REQ: Server close transaction incremented sequence tracking
+                    clientSeq: request.seq,    // References the incoming close seq property
                     id: request.id
                 };
                 ws.send(JSON.stringify(response));
@@ -69,12 +69,12 @@ wss.on('connection', (ws) => {
                 ws.close(1000); 
             }
 
-            // STEP C: KEEPALIVE LIFELINE RESPONSE
+            // STEP C: KEEPALIVE LIFELINE ALIGNMENT
             else if (request.type === 'ping') {
                 const response = {
                     version: request.version,
                     type: 'pong',
-                    seq: request.seq + 1,
+                    seq: request.seq,
                     clientSeq: request.seq,
                     id: request.id
                 };
@@ -82,7 +82,7 @@ wss.on('connection', (ws) => {
             }
 
         } catch (err) {
-            console.error('[Structural Error] Malformed parsing dropped:', err.message);
+            console.error('[Structural Error] Malformed JSON structure dropped:', err.message);
         }
     });
 
