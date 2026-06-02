@@ -111,7 +111,8 @@ wss.on('connection', (ws) => {
                 const response = {
                     version: request.version,
                     type: 'pong',
-                    seq: request.seq,
+                    seq: request.serverseq + 1,
+                    //seq: request.seq,
                     clientseq: request.seq,
                     id: request.id
                 };
