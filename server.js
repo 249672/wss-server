@@ -62,7 +62,8 @@ wss.on('connection', (ws) => {
                 const response = {
                     version: request.version,
                     type: 'paused',
-                    seq: 2,
+                    //seq: 2,
+                    seq: request.serverseq + 1,
                     clientseq: request.seq,
                     id: request.id
                 };
@@ -76,7 +77,8 @@ wss.on('connection', (ws) => {
                 const response = {
                     version: request.version,
                     type: 'resumed',
-                    seq: 2,
+                    //seq: 2,
+                    seq: request.serverseq + 1,
                     clientseq: request.seq,
                     id: request.id
                 };
