@@ -90,14 +90,21 @@ wss.on('connection', (ws) => {
                 const response = {
                     version: request.version,
                     type: 'closed',
-                    seq: request.seq + 1,
+                    seq: request.serverseq + 1, 
                     clientseq: request.seq,
-                    id: request.id
+                    id: request.id,
+                    parameters: {} 
                 };
+                
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
                 console.log(`[Handshake Ended] Sent close acknowledgement for ID: ${request.id}`);
-                ws.close(1000);
-            } 
+                
+                // Safely allow the message queue to flush before severing the socket
+                setImmediate(() => {
+                    ws.close(1000);
+                });
+            }
             
             // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE
             else if (request.type === 'ping') {
