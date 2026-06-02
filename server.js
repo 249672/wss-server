@@ -1,10 +1,8 @@
 const { WebSocketServer } = require('ws');
 const http = require('http');
 
-// Render sets the web environment port dynamically via process.env.PORT
-const port = process.env.PORT || 8080; 
+const port = process.env.PORT || 8080;
 
-// 1. Maintain the Render Infrastructure Web Router Health Check
 const server = http.createServer((req, res) => {
     if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -19,12 +17,24 @@ const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
     console.log('[Handshake] Genesys socket connection channel established.');
+    
+    // Dynamically track the unique outbound sequence counter per connection
+    let serverSeqCounter = 0;
 
     ws.on('message', (message, isBinary) => {
-        // Process streaming binary voice data chunks during an active conversation
         if (isBinary) {
-            console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`);
-            // Raw PCMU μ-law bytes land here every 20ms and are ready for transcription or recording
+            // 1. DE-INTERLEAVE THE AUDIO CHANNELS
+            const customerBuffer = Buffer.alloc(message.length / 2);
+            const agentBuffer = Buffer.alloc(message.length / 2);
+            let c = 0, a = 0;
+
+            for (let i = 0; i < message.length; i += 2) {
+                customerBuffer[c++] = message[i];     // Customer Audio
+                agentBuffer[a++] = message[i + 1];    // Agent Audio
+            }
+
+            // 2. PROCESS CHUNKS HERE 
+            // Send customerBuffer and agentBuffer to your downstream transcription/AI API
             return;
         }
 
@@ -32,92 +42,71 @@ wss.on('connection', (ws) => {
             const request = JSON.parse(message.toString());
             console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2));
 
-            // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN"
             if (request.type === 'open') {
+                serverSeqCounter = 1;
                 const response = {
                     version: request.version,
                     type: 'opened',
-                    seq: 1,
+                    seq: serverSeqCounter,
                     clientseq: request.seq,
                     id: request.id,
                     parameters: {
                         startPaused: false,
-                        media: [
-                            {
-                                type: 'audio',
-                                format: 'PCMU',
-                                channels: ['external', 'internal'],
-                                rate: 8000
-                            }
-                        ]
+                        media: [{ type: 'audio', format: 'PCMU', channels: ['external', 'internal'], rate: 8000 }]
                     }
                 };
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
                 console.log(`[Handshake OK] ID: ${request.id}`);
             } 
-            
-            // STEP A-2: SPECS PAUSED HANDSHAKE (Fixed: Correct sequence index tracking)
             else if (request.type === 'paused') {
+                serverSeqCounter++;
                 const response = {
                     version: request.version,
                     type: 'paused',
-                    seq: 2,
+                    seq: serverSeqCounter,
                     clientseq: request.seq,
                     id: request.id
                 };
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
-                console.log(`\u23F8\uFE0F [Session Paused] Call state changed to paused for ID: ${request.id}`);
-            }
-
-            // STEP A-3: SPECS RESUMED HANDSHAKE (Fixed: Correct sequence index tracking)
+                console.log(`⏸️ [Session Paused] ID: ${request.id}`);
+            } 
             else if (request.type === 'resumed') {
+                serverSeqCounter++;
                 const response = {
                     version: request.version,
                     type: 'resumed',
-                    seq: 2,
+                    seq: serverSeqCounter,
                     clientseq: request.seq,
                     id: request.id
                 };
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
-                console.log(`\u25B6\uFE0F [Session Resumed] Call state changed to streaming for ID: ${request.id}`);
-            }
-
-            // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE
+                console.log(`▶️ [Session Resumed] ID: ${request.id}`);
+            } 
             else if (request.type === 'close') {
+                serverSeqCounter++;
                 const response = {
                     version: request.version,
                     type: 'closed',
-                    seq: request.serverseq + 1, 
+                    seq: serverSeqCounter,
                     clientseq: request.seq,
                     id: request.id,
-                    parameters: {} 
+                    parameters: {}
                 };
-                
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
                 console.log(`[Handshake Ended] Sent close acknowledgement for ID: ${request.id}`);
-                
-                // Safely allow the message queue to flush before severing the socket
-                setImmediate(() => {
-                    ws.close(1000);
-                });
-            }
-            
-            // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE
+                setImmediate(() => ws.close(1000));
+            } 
             else if (request.type === 'ping') {
+                // Pings do not advance the server sequence counter in standard protocol responses
                 const response = {
                     version: request.version,
                     type: 'pong',
-                    seq: request.seq,
+                    seq: serverSeqCounter, 
                     clientseq: request.seq,
                     id: request.id
                 };
                 ws.send(JSON.stringify(response));
             }
-
         } catch (err) {
             console.error('[Structural Error] schema violation caught:', err.message);
         }
@@ -127,7 +116,7 @@ wss.on('connection', (ws) => {
         console.error('[Connection Error Details]:', error.message);
     });
 
-    ws.on('close', (code, reason) => {
+    ws.on('close', (code) => {
         console.log(`[Disconnected] Connection state closed. Code: ${code}`);
     });
 });
