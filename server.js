@@ -78,23 +78,20 @@ wss.on('connection', (ws) => {
         if (isBinary || Buffer.isBuffer(message) || typeof message !== 'string') {
             const bufferMessage = Buffer.from(message);
             
-            // FIX: Genesys sends session metadata inside the FIRST binary channel frame (usually ~673 bytes).
-            // If it contains a text string starting with '{', it is configuration data, NOT audio.
-            if (bufferMessage.length > 0 && bufferMessage[0] === 123) { // 123 is ASCII for '{'
+            // FIX: Use index pointer [0] to check if the first byte is ASCII '{' (123)
+            if (bufferMessage.length > 0 && bufferMessage[0] === 123) { 
                 try {
                     const metaText = bufferMessage.toString('utf8').trim();
                     if (metaText.startsWith('{')) {
-                        console.log("ℹ️ [AudioHook Media Header] Skipping binary metadata packet configuration.");
+                        console.log("ℹ️ [AudioHook Media Header] Discarding binary metadata packet.");
                         return; 
                     }
                 } catch (e) {
-                    // Fail-safe: if parsing fails, treat it as audio
+                    // Fallback to processing as raw audio if JSON parsing fails
                 }
             }
 
-            console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${bufferMessage.length} bytes`);
-            
-            // Queue the incoming true raw audio bytes for AWS stream consumption
+            // True audio packets will fall through here now:
             audioQueue.push(bufferMessage);
             return;
         }
@@ -106,7 +103,9 @@ wss.on('connection', (ws) => {
 
             // Ignore any fragmented text blocks
             const request = JSON.parse(cleanText);
-            console.log("Full Genesys Request Payload:", request.type);
+            
+            // FIXED: Restored full payload printout so we can read Genesys exceptions/close reasons
+            console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2));
 
             // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN"
             if (request.type === 'open') {
@@ -123,6 +122,7 @@ wss.on('connection', (ws) => {
                         ]
                     }
                 };
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
                 console.log(`[Handshake OK] ID: ${request.id}`);
 
@@ -133,18 +133,21 @@ wss.on('connection', (ws) => {
             // STEP A-2: SPECS PAUSED HANDSHAKE
             else if (request.type === 'paused') {
                 const response = { version: request.version, type: 'paused', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id };
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
             }
 
             // STEP A-3: SPECS RESUMED HANDSHAKE
             else if (request.type === 'resumed') {
                 const response = { version: request.version, type: 'resumed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id };
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
             }
 
             // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE
             else if (request.type === 'close') {
                 const response = { version: request.version, type: 'closed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id, parameters: {} };
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
                 console.log(`[Handshake Ended] Sent close acknowledgement for ID: ${request.id}`);
 
@@ -155,6 +158,7 @@ wss.on('connection', (ws) => {
             // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE
             else if (request.type === 'ping') {
                 const response = { version: request.version, type: 'pong', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id };
+                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
             }
 
