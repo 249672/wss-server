@@ -78,7 +78,7 @@ wss.on('connection', (ws) => {
         if (isBinary || Buffer.isBuffer(message) || typeof message !== 'string') {
             const bufferMessage = Buffer.from(message);
             
-            // FIX: Use index pointer [0] to check if the first byte is ASCII '{' (123)
+            // CRITICAL FIX: Explicitly target index [0] to check if first byte is ASCII '{' (123)
             if (bufferMessage.length > 0 && bufferMessage[0] === 123) { 
                 try {
                     const metaText = bufferMessage.toString('utf8').trim();
@@ -91,7 +91,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // True audio packets will fall through here now:
+            // True raw audio bytes pass safely through here now:
             audioQueue.push(bufferMessage);
             return;
         }
@@ -103,8 +103,6 @@ wss.on('connection', (ws) => {
 
             // Ignore any fragmented text blocks
             const request = JSON.parse(cleanText);
-            
-            // FIXED: Restored full payload printout so we can read Genesys exceptions/close reasons
             console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2));
 
             // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN"
@@ -158,7 +156,6 @@ wss.on('connection', (ws) => {
             // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE
             else if (request.type === 'ping') {
                 const response = { version: request.version, type: 'pong', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id };
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
             }
 
