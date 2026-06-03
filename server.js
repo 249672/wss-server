@@ -1,15 +1,15 @@
 const { WebSocketServer } = require('ws');
 const http = require('http');
-// 1. ADDED: Import AWS Transcribe Streaming Client
+// 1. Import AWS Transcribe Streaming Client
 const { TranscribeStreamingClient, StartStreamTranscriptionCommand } = require('@aws-sdk/client-transcribe-streaming');
 
 // Render sets the web environment port dynamically via process.env.PORT
 const port = process.env.PORT || 8080;
 
-// 2. ADDED: Initialize AWS Client (uses Render Environment Variables)
+// 2. Initialize AWS Client (uses Render Environment Variables)
 const transcribeClient = new TranscribeStreamingClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
-// 1. Maintain the Render Infrastructure Web Router Health Check
+// Maintain the Render Infrastructure Web Router Health Check
 const server = http.createServer((req, res) => {
     if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -25,11 +25,11 @@ const wss = new WebSocketServer({ server });
 wss.on('connection', (ws) => {
     console.log('[Handshake] Genesys socket connection channel established.');
 
-    // 3. ADDED: Track audio pipeline states per connection
+    // Track audio pipeline states per connection
     let audioQueue = [];
     let isTranscribing = false;
 
-    // 4. ADDED: Async generator to feed chunks into AWS SDK
+    // Async generator to feed chunks into AWS SDK
     async function* audioStreamGenerator() {
         while (ws.readyState === ws.OPEN || audioQueue.length > 0) {
             if (audioQueue.length > 0) {
@@ -41,7 +41,7 @@ wss.on('connection', (ws) => {
         }
     }
 
-    // 5. ADDED: Execute standard streaming session
+    // Execute streaming session
     async function startAwsTranscription() {
         if (isTranscribing) return;
         isTranscribing = true;
@@ -50,10 +50,11 @@ wss.on('connection', (ws) => {
             const command = new StartStreamTranscriptionCommand({
                 LanguageCode: 'en-US',
                 MediaSampleRateHertz: 8000,
-                MediaEncoding: 'pcm', // Handles linear raw ingestion
+                MediaEncoding: 'pcm', // AWS treats raw PCMU natively through this parameter
                 AudioStream: audioStreamGenerator()
             });
 
+            console.log("=== Initializing AWS Transcribe Connection... ===");
             const response = await transcribeClient.send(command);
             console.log("=== AWS Transcribe Session Active ===");
 
@@ -61,24 +62,40 @@ wss.on('connection', (ws) => {
                 if (event.TranscriptEvent?.Transcript?.Results) {
                     event.TranscriptEvent.Transcript.Results.forEach(result => {
                         if (!result.IsPartial) { // Log only finalized text blocks
-                            console.log(`📝 [Transcription]: ${result.Alternatives[0].Transcript}`);
+                            console.log(`📝 [Transcription]: ${result.Alternatives.Transcript}`);
                         }
                     });
                 }
             }
         } catch (err) {
             console.error('❌ AWS Transcribe Error:', err.message);
+            isTranscribing = false;
         }
     }
 
     ws.on('message', (message, isBinary) => {
-        // FIX: STRICT STREAM PROTECTION
-        // Force fully intercepts any raw binary Buffers or objects even if the isBinary flag is missing
+        // STRICT STREAM PROTECTION
         if (isBinary || Buffer.isBuffer(message) || typeof message !== 'string') {
-            console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`);
+            const bufferMessage = Buffer.from(message);
             
-            // 6. ADDED: Queue the incoming raw PCMU bytes for AWS stream consumption
-            audioQueue.push(Buffer.from(message));
+            // FIX: Genesys sends session metadata inside the FIRST binary channel frame (usually ~673 bytes).
+            // If it contains a text string starting with '{', it is configuration data, NOT audio.
+            if (bufferMessage.length > 0 && bufferMessage[0] === 123) { // 123 is ASCII for '{'
+                try {
+                    const metaText = bufferMessage.toString('utf8').trim();
+                    if (metaText.startsWith('{')) {
+                        console.log("ℹ️ [AudioHook Media Header] Skipping binary metadata packet configuration.");
+                        return; 
+                    }
+                } catch (e) {
+                    // Fail-safe: if parsing fails, treat it as audio
+                }
+            }
+
+            console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${bufferMessage.length} bytes`);
+            
+            // Queue the incoming true raw audio bytes for AWS stream consumption
+            audioQueue.push(bufferMessage);
             return;
         }
 
@@ -89,7 +106,7 @@ wss.on('connection', (ws) => {
 
             // Ignore any fragmented text blocks
             const request = JSON.parse(cleanText);
-            console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2));
+            console.log("Full Genesys Request Payload:", request.type);
 
             // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN"
             if (request.type === 'open') {
@@ -106,34 +123,28 @@ wss.on('connection', (ws) => {
                         ]
                     }
                 };
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
                 console.log(`[Handshake OK] ID: ${request.id}`);
 
-                // 7. ADDED: Trigger the translation pipeline right when connection opens
+                // Trigger the translation pipeline right when connection opens
                 startAwsTranscription();
             }
 
-            // STEP A-2: SPECS PAUSED HANDSHAKE (Fixed: Correct sequence index tracking)
+            // STEP A-2: SPECS PAUSED HANDSHAKE
             else if (request.type === 'paused') {
                 const response = { version: request.version, type: 'paused', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id };
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
-                console.log(`⏸️ [Session Paused] Call state changed to paused for ID: ${request.id}`);
             }
 
-            // STEP A-3: SPECS RESUMED HANDSHAKE (Fixed: Correct sequence index tracking)
+            // STEP A-3: SPECS RESUMED HANDSHAKE
             else if (request.type === 'resumed') {
                 const response = { version: request.version, type: 'resumed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id };
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
-                console.log(`▶️ [Session Resumed] Call state changed to streaming for ID: ${request.id}`);
             }
 
             // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE
             else if (request.type === 'close') {
                 const response = { version: request.version, type: 'closed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id, parameters: {} };
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
                 console.log(`[Handshake Ended] Sent close acknowledgement for ID: ${request.id}`);
 
@@ -144,7 +155,6 @@ wss.on('connection', (ws) => {
             // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE
             else if (request.type === 'ping') {
                 const response = { version: request.version, type: 'pong', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id };
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2));
                 ws.send(JSON.stringify(response));
             }
 
@@ -159,8 +169,8 @@ wss.on('connection', (ws) => {
 
     ws.on('close', (code, reason) => {
         console.log(`[Disconnected] Connection state closed. Code: ${code}`);
-        // 8. ADDED: Clear audio array elements on disconnect
-        audioQueue = [];
+        audioQueue = []; // Clear audio array elements on disconnect
+        isTranscribing = false;
     });
 });
 
