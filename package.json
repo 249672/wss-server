@@ -20,6 +20,7 @@
   },
   "homepage": "https://github.com/249672/wss-server#readme",
   "dependencies": {
+    "@aws-sdk/client-transcribe-streaming": "^3.1060.0",
     "ws": "^8.21.0"
   }
 }
