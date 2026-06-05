@@ -71,7 +71,7 @@ wss.on('connection', (ws) => {
             const command = new StartStreamTranscriptionCommand({ 
                 LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
-                MediaEncoding: 'pcm', // Bypasses codec restriction safely
+                MediaEncoding: 'pcm', // Using stable PCM to bypass account limits
                 AudioStream: audioStreamGenerator() 
             }); 
             
@@ -84,7 +84,7 @@ wss.on('connection', (ws) => {
                         if (!result.IsPartial) { 
                             const alternatives = result.Alternatives; 
                             if (alternatives && alternatives.length > 0) { 
-                                console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
+                                console.log(`📝 [Transcription]: ${alternatives.Transcript}`); 
                             } 
                         } 
                     }); 
@@ -109,10 +109,10 @@ wss.on('connection', (ws) => {
         try { 
             const cleanText = message.toString().trim(); 
             const request = JSON.parse(cleanText); 
-            console.log(`📨 Received Text Frame: ${request.type}`);
+            console.log(`\u1F4E5 Received Text Frame Type: ${request.type}`);
             
             if (request.type === 'open') { 
-                // STEP A: Respond immediately to Genesys protocol rules
+                // STEP A: Respond with standard dual channel expected profile parameters
                 const response = { 
                     version: request.version || "2", 
                     type: 'opened', 
@@ -122,14 +122,14 @@ wss.on('connection', (ws) => {
                     parameters: { 
                         startPaused: false, 
                         media: [ 
-                            { type: 'audio', format: 'PCMU', channels: ['external'], rate: 8000 } 
+                            { type: 'audio', format: 'PCMU', channels: ['external', 'internal'], rate: 8000 } 
                         ] 
                     } 
                 }; 
                 ws.send(JSON.stringify(response)); 
-                console.log(`[Handshake OK] Sent 'opened' acknowledgement response to Genesys.`); 
+                console.log(`[Handshake OK] Sent dual-channel 'opened' response to Genesys.`); 
                 
-                // STEP B: Start AWS session now that Genesys knows we are listening
+                // STEP B: Start AWS session now that the connection is officially verified
                 startAwsTranscription(); 
             } 
             else if (request.type === 'paused') { 
