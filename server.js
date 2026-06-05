@@ -87,7 +87,7 @@ wss.on('connection', (ws) => {
                         if (!result.IsPartial) { 
                             const alternatives = result.Alternatives;
                             if (alternatives && alternatives.length > 0) {
-                                console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
+                                console.log(`📝 [Transcription]: ${alternatives.Transcript}`); 
                             }
                         } 
                     }); 
@@ -110,19 +110,16 @@ wss.on('connection', (ws) => {
                 
                 // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" 
                 if (request.type === 'open') { 
-                    // Create a deep copy of incoming parameters
                     const outgoingParams = JSON.parse(JSON.stringify(request.parameters || {}));
 
-                    // FIX: Find and select ONLY the single channel profile or choose a compliant fallback track setup
                     let selectedMedia = null;
                     if (Array.isArray(outgoingParams.media)) {
                         selectedMedia = outgoingParams.media.find(m => m.channels && m.channels.includes('external') && m.channels.length === 1);
                         if (!selectedMedia) {
-                            selectedMedia = outgoingParams.media[0]; // Fallback to first if not explicitly found
+                            selectedMedia = outgoingParams.media[0]; 
                         }
                     }
 
-                    // Enforce the singular selected profile format object back to Genesys
                     outgoingParams.media = selectedMedia ? [selectedMedia] : [
                         { type: "audio", format: "PCMU", channels: [ "external" ], rate: 8000 }
                     ];
@@ -139,18 +136,21 @@ wss.on('connection', (ws) => {
                     console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
                     ws.send(JSON.stringify(response)); 
                     console.log(`[Handshake OK] ID: ${request.id}`); 
-                    
-                    setTimeout(() => {
-                        startAwsTranscription(); 
-                    }, 0);
                 } 
                 else if (request.type === 'paused') { 
                     const response = { version: request.version, type: 'paused', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
+                // FIX: WAIT UNTIL THE CALL IS OFFICIALLY RESUMED TO START TRANSCRIBING
+                // This guarantees the audio loop contains data before AWS initializes
                 else if (request.type === 'resumed') { 
                     const response = { version: request.version, type: 'resumed', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
+                    
+                    console.log("▶️ Call streaming state is active. Launching AWS thread.");
+                    setTimeout(() => {
+                        startAwsTranscription(); 
+                    }, 0);
                 } 
                 else if (request.type === 'close') { 
                     const response = { version: request.version, type: 'closed', seq: serverSeq++, clientseq: request.seq, id: request.id, parameters: {} }; 
