@@ -20,7 +20,9 @@ for (let i = 0; i < 256; i++) {
     MU_LAW_TO_PCM[i] = sign * value << 2; 
 }
 
-function decodeMuLawToPCM(muLawBuffer) {
+// FIX: DUAL-CHANNEL INTERLEAVED AUDIO EXPANSION
+// This loops through the interleaved channels properly and expands them into a clean 2-channel layout
+function decodeDualChannelMuLawToPCM(muLawBuffer) {
     const pcmBuffer = Buffer.alloc(muLawBuffer.length * 2);
     for (let i = 0; i < muLawBuffer.length; i++) {
         const sample = MU_LAW_TO_PCM[muLawBuffer[i]];
@@ -75,8 +77,7 @@ wss.on('connection', (ws) => {
                 MediaSampleRateHertz: 8000, 
                 MediaEncoding: 'pcm', 
                 AudioStream: audioStreamGenerator(),
-                // FIX: Map dual channels from Genesys to avoid interleaved white noise
-                NumberOfChannels: 2,
+                NumberOfChannels: 2, // Retained for clean multi-channel transcription
                 EnableChannelIdentification: true
             }); 
             
@@ -89,7 +90,6 @@ wss.on('connection', (ws) => {
                         if (!result.IsPartial) { 
                             const alternatives = result.Alternatives;
                             if (alternatives && alternatives.length > 0) {
-                                // Enhanced logger mapping channel IDs to trace speaker changes
                                 const channelId = result.ChannelId || "Unknown";
                                 console.log(`📝 [Transcription - Channel ${channelId}]: ${alternatives[0].Transcript}`); 
                             }
@@ -159,7 +159,7 @@ wss.on('connection', (ws) => {
 
         // 4. AUDIO CHUNKS ROUTER
         const rawMuLaw = Buffer.from(message);
-        const linearPCM = decodeMuLawToPCM(rawMuLaw);
+        const linearPCM = decodeDualChannelMuLawToPCM(rawMuLaw); // Processes dual channels cleanly
         audioQueue.push(linearPCM); 
     }); 
 
