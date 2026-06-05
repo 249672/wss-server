@@ -1,12 +1,12 @@
 const { WebSocketServer } = require('ws'); 
 const http = require('http'); 
-// 1. IMPORT: AWS Transcribe Streaming Client 
+// 1. ADDED: Import AWS Transcribe Streaming Client 
 const { TranscribeStreamingClient, StartStreamTranscriptionCommand } = require('@aws-sdk/client-transcribe-streaming'); 
 
 // Render sets the web environment port dynamically via process.env.PORT 
 const port = process.env.PORT || 8080; 
 
-// 2. INITIALIZE: AWS Client 
+// 2. ADDED: Initialize AWS Client (uses Render Environment Variables) 
 const transcribeClient = new TranscribeStreamingClient({ region: process.env.AWS_REGION || 'us-east-1' }); 
 
 // --- Real-time Mu-Law (PCMU) to Linear 16 PCM conversion table lookup --- 
@@ -51,10 +51,10 @@ const wss = new WebSocketServer({ server });
 wss.on('connection', (ws) => { 
     console.log('[Handshake] Genesys socket connection channel established.'); 
     
-    // 3. MANAGE: Audio pipeline streams per socket connection 
+    // 3. ADDED: Manage audio pipeline streams per socket connection 
     let audioQueue = []; 
     let isTranscribing = false; 
-    let serverSeq = 0; // FIX: Start track index at 0 to comply with Genesys rules
+    let serverSeq = 0; 
 
     // Async generator function to pipe chunks into AWS SDK safely 
     async function* audioStreamGenerator() { 
@@ -115,19 +115,17 @@ wss.on('connection', (ws) => {
                 
                 // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" 
                 if (request.type === 'open') { 
+                    // FIX: Direct mirroring of request metadata parameters blocks 
+                    // This retains all original media trackers and avoids strict schema validation flags
                     const response = { 
                         version: request.version, 
                         type: 'opened', 
-                        seq: serverSeq++, // FIX: This resolves to 0 on the first response and increments for subsequent frames
+                        seq: serverSeq++, 
                         clientseq: request.seq, 
                         id: request.id, 
-                        parameters: { 
-                            startPaused: false, 
-                            media: [ 
-                                { type: 'audio', format: 'PCMU', channels: ['external', 'internal'], rate: 8000 } 
-                            ] 
-                        } 
+                        parameters: request.parameters || {} 
                     }; 
+                    
                     console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
                     ws.send(JSON.stringify(response)); 
                     console.log(`[Handshake OK] ID: ${request.id}`); 
@@ -161,7 +159,6 @@ wss.on('connection', (ws) => {
         } 
         
         // 4. PROCESS STREAMING AUDIO
-        console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`); 
         const rawMuLaw = Buffer.from(message); 
         const monoPCM = decodeAndMixDualChannelToMonoPCM(rawMuLaw); 
         audioQueue.push(monoPCM); 
