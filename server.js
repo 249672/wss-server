@@ -20,7 +20,6 @@ for (let i = 0; i < 256; i++) {
     MU_LAW_TO_PCM[i] = sign * value << 2; 
 }
 
-// Helper function to decode PCMU payload into standard 16-bit PCM bytes
 function decodeMuLawToPCM(muLawBuffer) {
     const pcmBuffer = Buffer.alloc(muLawBuffer.length * 2);
     for (let i = 0; i < muLawBuffer.length; i++) {
@@ -70,6 +69,7 @@ wss.on('connection', (ws) => {
         isTranscribing = true; 
         
         try { 
+            console.log("=== Initializing AWS Transcribe Stream... ==="); 
             const command = new StartStreamTranscriptionCommand({ 
                 LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
@@ -77,7 +77,6 @@ wss.on('connection', (ws) => {
                 AudioStream: audioStreamGenerator() 
             }); 
             
-            console.log("=== Initializing AWS Transcribe Stream... ==="); 
             const response = await transcribeClient.send(command); 
             console.log("=== AWS Transcribe Session Active ==="); 
             
@@ -85,28 +84,25 @@ wss.on('connection', (ws) => {
                 if (event.TranscriptEvent?.Transcript?.Results) { 
                     event.TranscriptEvent.Transcript.Results.forEach(result => { 
                         if (!result.IsPartial) { 
-                            // FIX: Alternatives is an array, accessing index [0] safely
                             const alternatives = result.Alternatives;
                             if (alternatives && alternatives.length > 0) {
-                                console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
+                                console.log(`📝 [Transcription]: ${alternatives.Transcript}`); 
                             }
                         } 
                     }); 
                 } 
             } 
         } catch (err) { 
-            console.error('❌ AWS Transcribe Error:', err.message); 
+            console.error('❌ AWS Transcribe Error Loop Caught:', err); 
             isTranscribing = false; 
         } 
     } 
 
     ws.on('message', (message, isBinary) => { 
         // FIX: STRICT STREAM PROTECTION 
-        // Force fully intercepts any raw binary Buffers or objects even if the isBinary flag is missing 
         if (isBinary || Buffer.isBuffer(message) || typeof message !== 'string') { 
             console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`); 
             
-            // FIX: Convert incoming PCMU audio chunk to raw PCM before pushing to the AWS queue
             const rawMuLaw = Buffer.from(message);
             const linearPCM = decodeMuLawToPCM(rawMuLaw);
             audioQueue.push(linearPCM); 
@@ -114,9 +110,12 @@ wss.on('connection', (ws) => {
         } 
         
         try { 
-            // Clean up whitespace to ensure precise parsing 
             const cleanText = message.toString().trim(); 
-            if (!cleanText.startsWith('{')) return; // Ignore any fragmented text blocks 
+            
+            // FIX: Use an explicit string lookup to avoid missing the JSON frame due to hidden leading characters
+            if (!cleanText.includes('"type"') && !cleanText.includes('{')) {
+                return; 
+            }
             
             const request = JSON.parse(cleanText); 
             console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2)); 
@@ -140,7 +139,7 @@ wss.on('connection', (ws) => {
                 ws.send(JSON.stringify(response)); 
                 console.log(`[Handshake OK] ID: ${request.id}`); 
                 
-                // 5. ADDED: Trigger the translation pipeline right when connection opens 
+                // Trigger the transcription pipeline right when connection opens 
                 startAwsTranscription(); 
             } 
             // STEP A-2: SPECS PAUSED HANDSHAKE 
@@ -152,9 +151,7 @@ wss.on('connection', (ws) => {
                     clientseq: request.seq, 
                     id: request.id 
                 }; 
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
                 ws.send(JSON.stringify(response)); 
-                console.log(`\u23F8\uFE0F [Session Paused] Call state changed to paused for ID: ${request.id}`); 
             } 
             // STEP A-3: SPECS RESUMED HANDSHAKE 
             else if (request.type === 'resumed') { 
@@ -165,9 +162,7 @@ wss.on('connection', (ws) => {
                     clientseq: request.seq, 
                     id: request.id 
                 }; 
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
                 ws.send(JSON.stringify(response)); 
-                console.log(`\u25B6\uFE0F [Session Resumed] Call state changed to streaming for ID: ${request.id}`); 
             } 
             // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE 
             else if (request.type === 'close') { 
@@ -179,11 +174,7 @@ wss.on('connection', (ws) => {
                     id: request.id, 
                     parameters: {} 
                 }; 
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
                 ws.send(JSON.stringify(response)); 
-                console.log(`[Handshake Ended] Sent close acknowledgement for ID: ${request.id}`); 
-                
-                // Safely allow the message queue to flush before severing the socket 
                 setImmediate(() => { 
                     ws.close(1000); 
                 }); 
@@ -197,7 +188,6 @@ wss.on('connection', (ws) => {
                     clientseq: request.seq, 
                     id: request.id 
                 }; 
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
                 ws.send(JSON.stringify(response)); 
             } 
         } catch (err) { 
@@ -211,7 +201,6 @@ wss.on('connection', (ws) => {
 
     ws.on('close', (code, reason) => { 
         console.log(`[Disconnected] Connection state closed. Code: ${code}`); 
-        // 6. ADDED: Reset states on disconnection 
         audioQueue = []; 
         isTranscribing = false; 
     }); 
