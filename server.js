@@ -9,6 +9,27 @@ const transcribeClient = new TranscribeStreamingClient({
     region: process.env.AWS_REGION || 'us-east-1' 
 }); 
 
+// Real-time Mu-Law (PCMU) to Linear 16 PCM conversion table lookup
+const MU_LAW_TO_PCM = new Int16Array(256);
+for (let i = 0; i < 256; i++) {
+    let sign = (i & 0x80) ? -1 : 1;
+    let mask = ~i;
+    let exponent = (mask >> 4) & 0x07;
+    let leadingDigit = (mask & 0x0F) + 33;
+    let value = (leadingDigit << (exponent + 1)) - 33;
+    MU_LAW_TO_PCM[i] = sign * value << 2; 
+}
+
+// Helper to convert a single PCMU buffer into 16-bit PCM bytes
+function decodeMuLawToPCM(muLawBuffer) {
+    const pcmBuffer = Buffer.alloc(muLawBuffer.length * 2);
+    for (let i = 0; i < muLawBuffer.length; i++) {
+        const sample = MU_LAW_TO_PCM[muLawBuffer[i]];
+        pcmBuffer.writeInt16LE(sample, i * 2);
+    }
+    return pcmBuffer;
+}
+
 const server = http.createServer((req, res) => { 
     if (req.url === '/') { 
         res.writeHead(200, { 'Content-Type': 'text/plain' }); 
@@ -28,14 +49,13 @@ wss.on('connection', (ws) => {
     let isTranscribing = false; 
     let serverSeq = 1;
 
-    // Continuous pipe generator for AWS Transcribe
+    // Continuous pipe generator supplying uncompressed PCM
     async function* audioStreamGenerator() { 
         while (ws.readyState === ws.OPEN || audioQueue.length > 0) { 
             if (audioQueue.length > 0) { 
                 const chunk = audioQueue.shift(); 
                 yield { AudioEvent: { AudioChunk: chunk } }; 
             } else { 
-                // Keep the pipe hot and open
                 await new Promise(resolve => setImmediate(resolve)); 
             } 
         } 
@@ -51,7 +71,7 @@ wss.on('connection', (ws) => {
             const command = new StartStreamTranscriptionCommand({ 
                 LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
-                MediaEncoding: 'g711-ulaw', // FIX: Changed 'g711-mu' to 'g711-ulaw' to pass AWS validation
+                MediaEncoding: 'pcm', // Bypasses your account codec restriction
                 AudioStream: audioStreamGenerator() 
             }); 
             
@@ -64,8 +84,7 @@ wss.on('connection', (ws) => {
                         if (!result.IsPartial) { 
                             const alternatives = result.Alternatives; 
                             if (alternatives && alternatives.length > 0) { 
-                                // Safely print out the final text
-                                console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
+                                console.log(`📝 [Transcription]: ${alternatives.Transcript}`); 
                             } 
                         } 
                     }); 
@@ -77,13 +96,15 @@ wss.on('connection', (ws) => {
         } 
     } 
 
-    // FORCE INSTANT START: Do not wait for the text frame to execute AWS
+    // FORCE INSTANT START: Spin up worker right away
     startAwsTranscription();
 
     ws.on('message', (message, isBinary) => { 
-        // 1. Process Binary Audio Frames Immediately
+        // 1. Process Binary Audio Frames, Convert to PCM, and push immediately
         if (isBinary || Buffer.isBuffer(message)) { 
-            audioQueue.push(Buffer.from(message)); 
+            const rawMuLaw = Buffer.from(message);
+            const linearPCM = decodeMuLawToPCM(rawMuLaw); // Convert on-the-fly
+            audioQueue.push(linearPCM); 
             return; 
         } 
         
@@ -124,7 +145,6 @@ wss.on('connection', (ws) => {
                 ws.send(JSON.stringify({ version: request.version, type: 'pong', seq: serverSeq++, clientseq: request.seq, id: request.id })); 
             } 
         } catch (err) { 
-            // Silently absorb unparsed fragments so they don't crash the server connection
             console.error('⚠️ Non-JSON or malformed text payload skipped:', err.message); 
         } 
     }); 
