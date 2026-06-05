@@ -66,12 +66,12 @@ wss.on('connection', (ws) => {
         isTranscribing = true; 
         
         try { 
-            console.log("=== Initializing AWS Transcribe Stream Instantly ==="); 
+            console.log("=== Initializing AWS Transcribe Stream... ==="); 
             
             const command = new StartStreamTranscriptionCommand({ 
                 LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
-                MediaEncoding: 'pcm', // Bypasses your account codec restriction
+                MediaEncoding: 'pcm', // Bypasses codec restriction safely
                 AudioStream: audioStreamGenerator() 
             }); 
             
@@ -84,7 +84,7 @@ wss.on('connection', (ws) => {
                         if (!result.IsPartial) { 
                             const alternatives = result.Alternatives; 
                             if (alternatives && alternatives.length > 0) { 
-                                console.log(`📝 [Transcription]: ${alternatives.Transcript}`); 
+                                console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
                             } 
                         } 
                     }); 
@@ -96,14 +96,11 @@ wss.on('connection', (ws) => {
         } 
     } 
 
-    // FORCE INSTANT START: Spin up worker right away
-    startAwsTranscription();
-
     ws.on('message', (message, isBinary) => { 
         // 1. Process Binary Audio Frames, Convert to PCM, and push immediately
         if (isBinary || Buffer.isBuffer(message)) { 
             const rawMuLaw = Buffer.from(message);
-            const linearPCM = decodeMuLawToPCM(rawMuLaw); // Convert on-the-fly
+            const linearPCM = decodeMuLawToPCM(rawMuLaw); 
             audioQueue.push(linearPCM); 
             return; 
         } 
@@ -115,6 +112,7 @@ wss.on('connection', (ws) => {
             console.log(`📨 Received Text Frame: ${request.type}`);
             
             if (request.type === 'open') { 
+                // STEP A: Respond immediately to Genesys protocol rules
                 const response = { 
                     version: request.version || "2", 
                     type: 'opened', 
@@ -130,6 +128,9 @@ wss.on('connection', (ws) => {
                 }; 
                 ws.send(JSON.stringify(response)); 
                 console.log(`[Handshake OK] Sent 'opened' acknowledgement response to Genesys.`); 
+                
+                // STEP B: Start AWS session now that Genesys knows we are listening
+                startAwsTranscription(); 
             } 
             else if (request.type === 'paused') { 
                 ws.send(JSON.stringify({ version: request.version, type: 'paused', seq: serverSeq++, clientseq: request.seq, id: request.id })); 
