@@ -20,8 +20,6 @@ for (let i = 0; i < 256; i++) {
     MU_LAW_TO_PCM[i] = sign * value << 2; 
 }
 
-// FIX: DUAL-CHANNEL INTERLEAVED AUDIO EXPANSION
-// This loops through the interleaved channels properly and expands them into a clean 2-channel layout
 function decodeDualChannelMuLawToPCM(muLawBuffer) {
     const pcmBuffer = Buffer.alloc(muLawBuffer.length * 2);
     for (let i = 0; i < muLawBuffer.length; i++) {
@@ -51,6 +49,7 @@ wss.on('connection', (ws) => {
     // 3. MANAGE: Audio pipeline streams per socket connection 
     let audioQueue = []; 
     let isTranscribing = false; 
+    let serverSeq = 1; // Explicit state sequence index tracking
 
     // Async generator function to pipe chunks into AWS SDK safely 
     async function* audioStreamGenerator() { 
@@ -77,7 +76,7 @@ wss.on('connection', (ws) => {
                 MediaSampleRateHertz: 8000, 
                 MediaEncoding: 'pcm', 
                 AudioStream: audioStreamGenerator(),
-                NumberOfChannels: 2, // Retained for clean multi-channel transcription
+                NumberOfChannels: 2, 
                 EnableChannelIdentification: true
             }); 
             
@@ -117,7 +116,7 @@ wss.on('connection', (ws) => {
                     const response = { 
                         version: request.version, 
                         type: 'opened', 
-                        seq: 1, 
+                        seq: serverSeq++, // FIX: Dynamically increment the sequence counter
                         clientseq: request.seq, 
                         id: request.id, 
                         parameters: { 
@@ -131,24 +130,27 @@ wss.on('connection', (ws) => {
                     ws.send(JSON.stringify(response)); 
                     console.log(`[Handshake OK] ID: ${request.id}`); 
                     
-                    // Trigger transcription loop now that handshake completed
-                    startAwsTranscription(); 
+                    // FIX: Process the AWS engine call inside a separate event frame 
+                    // This allows your server to flush the text frames back to Genesys instantly
+                    setTimeout(() => {
+                        startAwsTranscription(); 
+                    }, 0);
                 } 
                 else if (request.type === 'paused') { 
-                    const response = { version: request.version, type: 'paused', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
+                    const response = { version: request.version, type: 'paused', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
                 else if (request.type === 'resumed') { 
-                    const response = { version: request.version, type: 'resumed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
+                    const response = { version: request.version, type: 'resumed', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
                 else if (request.type === 'close') { 
-                    const response = { version: request.version, type: 'closed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id, parameters: {} }; 
+                    const response = { version: request.version, type: 'closed', seq: serverSeq++, clientseq: request.seq, id: request.id, parameters: {} }; 
                     ws.send(JSON.stringify(response)); 
                     setImmediate(() => { ws.close(1000); }); 
                 } 
                 else if (request.type === 'ping') { 
-                    const response = { version: request.version, type: 'pong', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
+                    const response = { version: request.version, type: 'pong', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
                 return; 
@@ -159,7 +161,7 @@ wss.on('connection', (ws) => {
 
         // 4. AUDIO CHUNKS ROUTER
         const rawMuLaw = Buffer.from(message);
-        const linearPCM = decodeDualChannelMuLawToPCM(rawMuLaw); // Processes dual channels cleanly
+        const linearPCM = decodeDualChannelMuLawToPCM(rawMuLaw); 
         audioQueue.push(linearPCM); 
     }); 
 
