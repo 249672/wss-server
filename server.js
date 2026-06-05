@@ -20,23 +20,14 @@ for (let i = 0; i < 256; i++) {
     MU_LAW_TO_PCM[i] = sign * value << 2; 
 } 
 
-// FIX: REAL-TIME DUAL CHANNEL TO MONO PCM MIXER DOWN
-// Intercepts interleaved dual-channel buffers, decodes mu-law samples, averages them, and saves a pure single-channel pcm stream
 function decodeAndMixDualChannelToMonoPCM(muLawBuffer) {
-    // Interleaved dual channel means 2 samples per frame. Mono output will be exactly half the size in samples, but 16-bit (x2 bytes)
-    // Therefore, output buffer length exactly matches the incoming buffer length
     const pcmBuffer = Buffer.alloc(muLawBuffer.length);
     let outputSampleIndex = 0;
 
     for (let i = 0; i < muLawBuffer.length; i += 2) {
-        // Isolate sample 1 (External / Customer) and sample 2 (Internal / Agent)
         const sample1 = MU_LAW_TO_PCM[muLawBuffer[i]];
         const sample2 = MU_LAW_TO_PCM[muLawBuffer[i + 1]];
-
-        // Mix down by taking the mathematical average of both speakers
         const mixedMonoSample = Math.floor((sample1 + sample2) / 2);
-
-        // Save back sequentially as a clean uncompressed linear mono stream frame
         pcmBuffer.writeInt16LE(mixedMonoSample, outputSampleIndex * 2);
         outputSampleIndex++;
     }
@@ -63,6 +54,7 @@ wss.on('connection', (ws) => {
     // 3. MANAGE: Audio pipeline streams per socket connection 
     let audioQueue = []; 
     let isTranscribing = false; 
+    let serverSeq = 0; // FIX: Start track index at 0 to comply with Genesys rules
 
     // Async generator function to pipe chunks into AWS SDK safely 
     async function* audioStreamGenerator() { 
@@ -87,7 +79,7 @@ wss.on('connection', (ws) => {
             const command = new StartStreamTranscriptionCommand({ 
                 LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
-                MediaEncoding: 'pcm', // Clean mono PCM streaming pipeline active
+                MediaEncoding: 'pcm', 
                 AudioStream: audioStreamGenerator() 
             }); 
             
@@ -126,7 +118,7 @@ wss.on('connection', (ws) => {
                     const response = { 
                         version: request.version, 
                         type: 'opened', 
-                        seq: 1, 
+                        seq: serverSeq++, // FIX: This resolves to 0 on the first response and increments for subsequent frames
                         clientseq: request.seq, 
                         id: request.id, 
                         parameters: { 
@@ -144,22 +136,22 @@ wss.on('connection', (ws) => {
                     startAwsTranscription(); 
                 } 
                 else if (request.type === 'paused') { 
-                    const response = { version: request.version, type: 'paused', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
+                    const response = { version: request.version, type: 'paused', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
                 else if (request.type === 'resumed') { 
-                    const response = { version: request.version, type: 'resumed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
+                    const response = { version: request.version, type: 'resumed', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
                 else if (request.type === 'close') { 
-                    const response = { version: request.version, type: 'closed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id, parameters: {} }; 
+                    const response = { version: request.version, type: 'closed', seq: serverSeq++, clientseq: request.seq, id: request.id, parameters: {} }; 
                     ws.send(JSON.stringify(response)); 
                     setImmediate(() => { 
                         ws.close(1000); 
                     }); 
                 } 
                 else if (request.type === 'ping') { 
-                    const response = { version: request.version, type: 'pong', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
+                    const response = { version: request.version, type: 'pong', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
                 return; 
@@ -171,8 +163,6 @@ wss.on('connection', (ws) => {
         // 4. PROCESS STREAMING AUDIO
         console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`); 
         const rawMuLaw = Buffer.from(message); 
-        
-        // FIX: Mix down interleaved channels to mono PCM before pushing to AWS
         const monoPCM = decodeAndMixDualChannelToMonoPCM(rawMuLaw); 
         audioQueue.push(monoPCM); 
     }); 
