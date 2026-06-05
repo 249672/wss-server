@@ -20,7 +20,7 @@ for (let i = 0; i < 256; i++) {
     MU_LAW_TO_PCM[i] = sign * value << 2; 
 }
 
-function decodeDualChannelMuLawToPCM(muLawBuffer) {
+function decodeMuLawToPCM(muLawBuffer) {
     const pcmBuffer = Buffer.alloc(muLawBuffer.length * 2);
     for (let i = 0; i < muLawBuffer.length; i++) {
         const sample = MU_LAW_TO_PCM[muLawBuffer[i]];
@@ -58,6 +58,7 @@ wss.on('connection', (ws) => {
                 const chunk = audioQueue.shift(); 
                 yield { AudioEvent: { AudioChunk: chunk } }; 
             } else { 
+                // Wait 20ms before checking for new audio packets to prevent loop blocking 
                 await new Promise(resolve => setTimeout(resolve, 20)); 
             } 
         } 
@@ -74,9 +75,7 @@ wss.on('connection', (ws) => {
                 LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
                 MediaEncoding: 'pcm', 
-                AudioStream: audioStreamGenerator(),
-                NumberOfChannels: 2, 
-                EnableChannelIdentification: true
+                AudioStream: audioStreamGenerator()
             }); 
             
             const response = await transcribeClient.send(command); 
@@ -88,8 +87,7 @@ wss.on('connection', (ws) => {
                         if (!result.IsPartial) { 
                             const alternatives = result.Alternatives;
                             if (alternatives && alternatives.length > 0) {
-                                const channelId = result.ChannelId || "Unknown";
-                                console.log(`📝 [Transcription - Channel ${channelId}]: ${alternatives.Transcript}`); 
+                                console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
                             }
                         } 
                     }); 
@@ -112,9 +110,22 @@ wss.on('connection', (ws) => {
                 
                 // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" 
                 if (request.type === 'open') { 
-                    // FIX: Dynamically extract and mirror the parameter block sent by Genesys.
-                    // This preserves unique track IDs, channel counts, and rates required for compliance.
-                    const incomingParams = request.parameters || {};
+                    // Create a deep copy of incoming parameters
+                    const outgoingParams = JSON.parse(JSON.stringify(request.parameters || {}));
+
+                    // FIX: Find and select ONLY the single channel profile or choose a compliant fallback track setup
+                    let selectedMedia = null;
+                    if (Array.isArray(outgoingParams.media)) {
+                        selectedMedia = outgoingParams.media.find(m => m.channels && m.channels.includes('external') && m.channels.length === 1);
+                        if (!selectedMedia) {
+                            selectedMedia = outgoingParams.media[0]; // Fallback to first if not explicitly found
+                        }
+                    }
+
+                    // Enforce the singular selected profile format object back to Genesys
+                    outgoingParams.media = selectedMedia ? [selectedMedia] : [
+                        { type: "audio", format: "PCMU", channels: [ "external" ], rate: 8000 }
+                    ];
 
                     const response = { 
                         version: request.version, 
@@ -122,7 +133,7 @@ wss.on('connection', (ws) => {
                         seq: serverSeq++, 
                         clientseq: request.seq, 
                         id: request.id, 
-                        parameters: incomingParams 
+                        parameters: outgoingParams 
                     }; 
                     
                     console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
@@ -158,7 +169,7 @@ wss.on('connection', (ws) => {
 
         // 4. AUDIO CHUNKS ROUTER
         const rawMuLaw = Buffer.from(message);
-        const linearPCM = decodeDualChannelMuLawToPCM(rawMuLaw); 
+        const linearPCM = decodeMuLawToPCM(rawMuLaw); 
         audioQueue.push(linearPCM); 
     }); 
 
