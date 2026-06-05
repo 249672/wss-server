@@ -1,12 +1,12 @@
 const { WebSocketServer } = require('ws'); 
 const http = require('http'); 
-// 1. ADDED: Import AWS Transcribe Streaming Client 
+// 1. IMPORT: AWS Transcribe Streaming Client 
 const { TranscribeStreamingClient, StartStreamTranscriptionCommand } = require('@aws-sdk/client-transcribe-streaming'); 
 
 // Render sets the web environment port dynamically via process.env.PORT 
 const port = process.env.PORT || 8080; 
 
-// 2. ADDED: Initialize AWS Client (uses Render Environment Variables) 
+// 2. INITIALIZE: AWS Client 
 const transcribeClient = new TranscribeStreamingClient({ region: process.env.AWS_REGION || 'us-east-1' }); 
 
 // 1. Maintain the Render Infrastructure Web Router Health Check 
@@ -25,10 +25,9 @@ const wss = new WebSocketServer({ server });
 wss.on('connection', (ws) => { 
     console.log('[Handshake] Genesys socket connection channel established.'); 
     
-    // 3. ADDED: Manage audio pipeline streams per socket connection 
+    // 3. MANAGE: Audio pipeline streams per socket connection 
     let audioQueue = []; 
     let isTranscribing = false; 
-    let fullTranscript = ""; // Variable to store the full text for future operations
 
     // Async generator function to pipe chunks into AWS SDK safely 
     async function* audioStreamGenerator() { 
@@ -50,13 +49,10 @@ wss.on('connection', (ws) => {
         
         try { 
             const command = new StartStreamTranscriptionCommand({ 
-                IdentifyMultipleLanguages: true,
-                LanguageOptions: "en-US,es-US",
+                LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
-                MediaEncoding: 'pcm', // For raw audio pipelines 
-                AudioStream: audioStreamGenerator(),
-                EnablePartialResultsStabilization: true, 
-                PartialResultsStability: "high"
+                MediaEncoding: 'g711-mu', // FIX: Genesys sends PCMU, so AWS must expect 'g711-mu'
+                AudioStream: audioStreamGenerator() 
             }); 
             
             console.log("=== Initializing AWS Transcribe Stream... ==="); 
@@ -67,10 +63,11 @@ wss.on('connection', (ws) => {
                 if (event.TranscriptEvent?.Transcript?.Results) { 
                     event.TranscriptEvent.Transcript.Results.forEach(result => { 
                         if (!result.IsPartial) { 
-                            const transcript = result.Alternatives[0].Transcript;
-                            fullTranscript += transcript + " "; // Add to downstream string
-                            // Only log finalized text with its identified language
-                            console.log(`📝 [Transcription - ${result.LanguageCode}]: ${transcript}`); 
+                            // FIX: Alternatives is an array. Must access index [0]
+                            const transcript = result.Alternatives[0]?.Transcript;
+                            if (transcript) {
+                                console.log(`📝 [Transcription]: ${transcript}`); 
+                            }
                         } 
                     }); 
                 } 
@@ -85,7 +82,8 @@ wss.on('connection', (ws) => {
         // FIX: STRICT STREAM PROTECTION 
         // Force fully intercepts any raw binary Buffers or objects even if the isBinary flag is missing 
         if (isBinary || Buffer.isBuffer(message) || typeof message !== 'string') { 
-            // 4. ADDED: Directly capture your accepted packet and push it to AWS queue 
+            console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`); 
+            // 4. CAPTURE: Directly capture your accepted packet and push it to AWS queue 
             audioQueue.push(Buffer.from(message)); 
             return; 
         } 
@@ -117,7 +115,7 @@ wss.on('connection', (ws) => {
                 ws.send(JSON.stringify(response)); 
                 console.log(`[Handshake OK] ID: ${request.id}`); 
                 
-                // 5. ADDED: Trigger the translation pipeline right when connection opens 
+                // 5. TRIGGER: Start transcription pipeline on successful open handshake
                 startAwsTranscription(); 
             } 
             // STEP A-2: SPECS PAUSED HANDSHAKE 
@@ -188,10 +186,9 @@ wss.on('connection', (ws) => {
 
     ws.on('close', (code, reason) => { 
         console.log(`[Disconnected] Connection state closed. Code: ${code}`); 
-        // 6. ADDED: Reset states on disconnection 
+        // 6. RESET: Clear states on disconnection 
         audioQueue = []; 
         isTranscribing = false; 
-        fullTranscript = "";
     }); 
 }); 
 
