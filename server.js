@@ -20,6 +20,7 @@ for (let i = 0; i < 256; i++) {
     MU_LAW_TO_PCM[i] = sign * value << 2; 
 }
 
+// Helper function to decode PCMU payload into standard 16-bit PCM bytes
 function decodeMuLawToPCM(muLawBuffer) {
     const pcmBuffer = Buffer.alloc(muLawBuffer.length * 2);
     for (let i = 0; i < muLawBuffer.length; i++) {
@@ -86,113 +87,83 @@ wss.on('connection', (ws) => {
                         if (!result.IsPartial) { 
                             const alternatives = result.Alternatives;
                             if (alternatives && alternatives.length > 0) {
-                                console.log(`📝 [Transcription]: ${alternatives.Transcript}`); 
+                                console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
                             }
                         } 
                     }); 
                 } 
             } 
         } catch (err) { 
-            console.error('❌ AWS Transcribe Error Loop Caught:', err); 
+            console.error('❌ AWS Transcribe Error Loop Caught:', err.message); 
             isTranscribing = false; 
         } 
     } 
 
-    ws.on('message', (message, isBinary) => { 
-        // FIX: STRICT STREAM PROTECTION 
-        if (isBinary || Buffer.isBuffer(message) || typeof message !== 'string') { 
-            console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`); 
-            
-            const rawMuLaw = Buffer.from(message);
-            const linearPCM = decodeMuLawToPCM(rawMuLaw);
-            audioQueue.push(linearPCM); 
-            return; 
-        } 
-        
-        try { 
-            const cleanText = message.toString().trim(); 
-            
-            // FIX: Use an explicit string lookup to avoid missing the JSON frame due to hidden leading characters
-            if (!cleanText.includes('"type"') && !cleanText.includes('{')) {
-                return; 
-            }
-            
-            const request = JSON.parse(cleanText); 
-            console.log("Full Genesys Request Payload:", JSON.stringify(request, null, 2)); 
-            
-            // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" 
-            if (request.type === 'open') { 
-                const response = { 
-                    version: request.version, 
-                    type: 'opened', 
-                    seq: 1, 
-                    clientseq: request.seq, 
-                    id: request.id, 
-                    parameters: { 
-                        startPaused: false, 
-                        media: [ 
-                            { type: 'audio', format: 'PCMU', channels: ['external', 'internal'], rate: 8000 } 
-                        ] 
-                    } 
-                }; 
-                console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
-                ws.send(JSON.stringify(response)); 
-                console.log(`[Handshake OK] ID: ${request.id}`); 
+    ws.on('message', (message) => { 
+        // Convert input directly to string to test if it contains handshake text
+        const textCheck = message.toString().trim();
+
+        // FIX: STRICT HANDSHAKE INTERACTION OVERRIDE
+        // If it looks like JSON metadata, intercept it immediately and bypass the audio loop
+        if (textCheck.startsWith('{') || textCheck.includes('"type"') || textCheck.includes('"version"')) {
+            try {
+                const request = JSON.parse(textCheck); 
+                console.log(`📨 Received Valid Handshake Frame Type: "${request.type}"`); 
                 
-                // Trigger the transcription pipeline right when connection opens 
-                startAwsTranscription(); 
-            } 
-            // STEP A-2: SPECS PAUSED HANDSHAKE 
-            else if (request.type === 'paused') { 
-                const response = { 
-                    version: request.version, 
-                    type: 'paused', 
-                    seq: (request.serverseq || 0) + 1, 
-                    clientseq: request.seq, 
-                    id: request.id 
-                }; 
-                ws.send(JSON.stringify(response)); 
-            } 
-            // STEP A-3: SPECS RESUMED HANDSHAKE 
-            else if (request.type === 'resumed') { 
-                const response = { 
-                    version: request.version, 
-                    type: 'resumed', 
-                    seq: (request.serverseq || 0) + 1, 
-                    clientseq: request.seq, 
-                    id: request.id 
-                }; 
-                ws.send(JSON.stringify(response)); 
-            } 
-            // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE 
-            else if (request.type === 'close') { 
-                const response = { 
-                    version: request.version, 
-                    type: 'closed', 
-                    seq: (request.serverseq || 0) + 1, 
-                    clientseq: request.seq, 
-                    id: request.id, 
-                    parameters: {} 
-                }; 
-                ws.send(JSON.stringify(response)); 
-                setImmediate(() => { 
-                    ws.close(1000); 
-                }); 
-            } 
-            // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE 
-            else if (request.type === 'ping') { 
-                const response = { 
-                    version: request.version, 
-                    type: 'pong', 
-                    seq: (request.serverseq || 0) + 1, 
-                    clientseq: request.seq, 
-                    id: request.id 
-                }; 
-                ws.send(JSON.stringify(response)); 
-            } 
-        } catch (err) { 
-            console.error('[Structural Error] schema violation caught:', err.message); 
-        } 
+                // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" 
+                if (request.type === 'open') { 
+                    const response = { 
+                        version: request.version, 
+                        type: 'opened', 
+                        seq: 1, 
+                        clientseq: request.seq, 
+                        id: request.id, 
+                        parameters: { 
+                            startPaused: false, 
+                            media: [ 
+                                { type: 'audio', format: 'PCMU', channels: ['external', 'internal'], rate: 8000 } 
+                            ] 
+                        } 
+                    }; 
+                    console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
+                    ws.send(JSON.stringify(response)); 
+                    console.log(`[Handshake OK] ID: ${request.id}`); 
+                    
+                    // Trigger the translation pipeline right when connection opens 
+                    startAwsTranscription(); 
+                } 
+                // STEP A-2: SPECS PAUSED HANDSHAKE 
+                else if (request.type === 'paused') { 
+                    const response = { version: request.version, type: 'paused', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
+                    ws.send(JSON.stringify(response)); 
+                } 
+                // STEP A-3: SPECS RESUMED HANDSHAKE 
+                else if (request.type === 'resumed') { 
+                    const response = { version: request.version, type: 'resumed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
+                    ws.send(JSON.stringify(response)); 
+                } 
+                // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE 
+                else if (request.type === 'close') { 
+                    const response = { version: request.version, type: 'closed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id, parameters: {} }; 
+                    ws.send(JSON.stringify(response)); 
+                    setImmediate(() => { ws.close(1000); }); 
+                } 
+                // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE 
+                else if (request.type === 'ping') { 
+                    const response = { version: request.version, type: 'pong', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
+                    ws.send(JSON.stringify(response)); 
+                } 
+                return; // Structural check processed completely
+            } catch (err) {
+                console.error('⚠️ Intercept failed to evaluate schema object:', err.message);
+            }
+        }
+
+        // 4. ADDED: If it's not a text handshake, treat it as a raw binary audio chunk
+        console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`); 
+        const rawMuLaw = Buffer.from(message);
+        const linearPCM = decodeMuLawToPCM(rawMuLaw);
+        audioQueue.push(linearPCM); 
     }); 
 
     ws.on('error', (error) => { 
