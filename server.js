@@ -1,12 +1,12 @@
 const { WebSocketServer } = require('ws'); 
 const http = require('http'); 
-// 1. ADDED: Import AWS Transcribe Streaming Client 
+// 1. IMPORT: AWS Transcribe Streaming Client 
 const { TranscribeStreamingClient, StartStreamTranscriptionCommand } = require('@aws-sdk/client-transcribe-streaming'); 
 
 // Render sets the web environment port dynamically via process.env.PORT 
 const port = process.env.PORT || 8080; 
 
-// 2. ADDED: Initialize AWS Client (uses Render Environment Variables) 
+// 2. INITIALIZE: AWS Client 
 const transcribeClient = new TranscribeStreamingClient({ region: process.env.AWS_REGION || 'us-east-1' }); 
 
 // --- Real-time Mu-Law (PCMU) to Linear 16 PCM conversion table lookup --- 
@@ -20,15 +20,28 @@ for (let i = 0; i < 256; i++) {
     MU_LAW_TO_PCM[i] = sign * value << 2; 
 } 
 
-// Helper function to decode PCMU payload into standard 16-bit PCM bytes 
-function decodeMuLawToPCM(muLawBuffer) { 
-    const pcmBuffer = Buffer.alloc(muLawBuffer.length * 2); 
-    for (let i = 0; i < muLawBuffer.length; i++) { 
-        const sample = MU_LAW_TO_PCM[muLawBuffer[i]]; 
-        pcmBuffer.writeInt16LE(sample, i * 2); 
-    } 
-    return pcmBuffer; 
-} 
+// FIX: REAL-TIME DUAL CHANNEL TO MONO PCM MIXER DOWN
+// Intercepts interleaved dual-channel buffers, decodes mu-law samples, averages them, and saves a pure single-channel pcm stream
+function decodeAndMixDualChannelToMonoPCM(muLawBuffer) {
+    // Interleaved dual channel means 2 samples per frame. Mono output will be exactly half the size in samples, but 16-bit (x2 bytes)
+    // Therefore, output buffer length exactly matches the incoming buffer length
+    const pcmBuffer = Buffer.alloc(muLawBuffer.length);
+    let outputSampleIndex = 0;
+
+    for (let i = 0; i < muLawBuffer.length; i += 2) {
+        // Isolate sample 1 (External / Customer) and sample 2 (Internal / Agent)
+        const sample1 = MU_LAW_TO_PCM[muLawBuffer[i]];
+        const sample2 = MU_LAW_TO_PCM[muLawBuffer[i + 1]];
+
+        // Mix down by taking the mathematical average of both speakers
+        const mixedMonoSample = Math.floor((sample1 + sample2) / 2);
+
+        // Save back sequentially as a clean uncompressed linear mono stream frame
+        pcmBuffer.writeInt16LE(mixedMonoSample, outputSampleIndex * 2);
+        outputSampleIndex++;
+    }
+    return pcmBuffer;
+}
 // ------------------------------------------------------------------------ 
 
 // 1. Maintain the Render Infrastructure Web Router Health Check 
@@ -47,7 +60,7 @@ const wss = new WebSocketServer({ server });
 wss.on('connection', (ws) => { 
     console.log('[Handshake] Genesys socket connection channel established.'); 
     
-    // 3. ADDED: Manage audio pipeline streams per socket connection 
+    // 3. MANAGE: Audio pipeline streams per socket connection 
     let audioQueue = []; 
     let isTranscribing = false; 
 
@@ -74,7 +87,7 @@ wss.on('connection', (ws) => {
             const command = new StartStreamTranscriptionCommand({ 
                 LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
-                MediaEncoding: 'pcm', // For raw audio pipelines 
+                MediaEncoding: 'pcm', // Clean mono PCM streaming pipeline active
                 AudioStream: audioStreamGenerator() 
             }); 
             
@@ -87,7 +100,6 @@ wss.on('connection', (ws) => {
                         if (!result.IsPartial) { 
                             const alternatives = result.Alternatives; 
                             if (alternatives && alternatives.length > 0) { 
-                                // FIX: Restored array index accessor syntax [0]
                                 console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
                             } 
                         } 
@@ -101,7 +113,6 @@ wss.on('connection', (ws) => {
     } 
 
     ws.on('message', (message) => { 
-        // Convert input directly to string to test if it contains handshake text 
         const textCheck = message.toString().trim(); 
         
         // STRICT HANDSHAKE INTERACTION OVERRIDE 
@@ -132,52 +143,23 @@ wss.on('connection', (ws) => {
                     // Trigger the translation pipeline right when connection opens 
                     startAwsTranscription(); 
                 } 
-                // STEP A-2: SPECS PAUSED HANDSHAKE 
                 else if (request.type === 'paused') { 
-                    const response = { 
-                        version: request.version, 
-                        type: 'paused', 
-                        seq: (request.serverseq || 0) + 1, 
-                        clientseq: request.seq, 
-                        id: request.id 
-                    }; 
+                    const response = { version: request.version, type: 'paused', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
-                // STEP A-3: SPECS RESUMED HANDSHAKE 
                 else if (request.type === 'resumed') { 
-                    const response = { 
-                        version: request.version, 
-                        type: 'resumed', 
-                        seq: (request.serverseq || 0) + 1, 
-                        clientseq: request.seq, 
-                        id: request.id 
-                    }; 
+                    const response = { version: request.version, type: 'resumed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
-                // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE 
                 else if (request.type === 'close') { 
-                    const response = { 
-                        version: request.version, 
-                        type: 'closed', 
-                        seq: (request.serverseq || 0) + 1, 
-                        clientseq: request.seq, 
-                        id: request.id, 
-                        parameters: {} 
-                    }; 
+                    const response = { version: request.version, type: 'closed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id, parameters: {} }; 
                     ws.send(JSON.stringify(response)); 
                     setImmediate(() => { 
                         ws.close(1000); 
                     }); 
                 } 
-                // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE 
                 else if (request.type === 'ping') { 
-                    const response = { 
-                        version: request.version, 
-                        type: 'pong', 
-                        seq: (request.serverseq || 0) + 1, 
-                        clientseq: request.seq, 
-                        id: request.id 
-                    }; 
+                    const response = { version: request.version, type: 'pong', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
                 return; 
@@ -186,11 +168,13 @@ wss.on('connection', (ws) => {
             } 
         } 
         
-        // 4. ADDED: If it's not a text handshake, treat it as a raw binary audio chunk 
+        // 4. PROCESS STREAMING AUDIO
         console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`); 
         const rawMuLaw = Buffer.from(message); 
-        const linearPCM = decodeMuLawToPCM(rawMuLaw); 
-        audioQueue.push(linearPCM); 
+        
+        // FIX: Mix down interleaved channels to mono PCM before pushing to AWS
+        const monoPCM = decodeAndMixDualChannelToMonoPCM(rawMuLaw); 
+        audioQueue.push(monoPCM); 
     }); 
 
     ws.on('error', (error) => { 
