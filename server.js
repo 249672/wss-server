@@ -112,17 +112,18 @@ wss.on('connection', (ws) => {
                 if (request.type === 'open') { 
                     const outgoingParams = JSON.parse(JSON.stringify(request.parameters || {}));
 
-                    let selectedMedia = null;
+                    // FIX: Isolate the exact matching element reference directly from the array.
+                    // This retains critical session tracking identifiers (like track id) that Genesys requires.
+                    let selectedMediaObject = null;
                     if (Array.isArray(outgoingParams.media)) {
-                        selectedMedia = outgoingParams.media.find(m => m.channels && m.channels.includes('external') && m.channels.length === 1);
-                        if (!selectedMedia) {
-                            selectedMedia = outgoingParams.media[0]; 
+                        selectedMediaObject = outgoingParams.media.find(m => m.channels && m.channels.includes('external') && m.channels.length === 1);
+                        if (!selectedMediaObject) {
+                            selectedMediaObject = outgoingParams.media[0]; // Strict array position fallback
                         }
                     }
 
-                    outgoingParams.media = selectedMedia ? [selectedMedia] : [
-                        { type: "audio", format: "PCMU", channels: [ "external" ], rate: 8000 }
-                    ];
+                    // Reassign the exact retained reference structure back as a single-element list
+                    outgoingParams.media = selectedMediaObject ? [selectedMediaObject] : [];
 
                     const response = { 
                         version: request.version, 
@@ -141,8 +142,6 @@ wss.on('connection', (ws) => {
                     const response = { version: request.version, type: 'paused', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
-                // FIX: WAIT UNTIL THE CALL IS OFFICIALLY RESUMED TO START TRANSCRIBING
-                // This guarantees the audio loop contains data before AWS initializes
                 else if (request.type === 'resumed') { 
                     const response = { version: request.version, type: 'resumed', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
