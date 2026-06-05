@@ -49,7 +49,7 @@ wss.on('connection', (ws) => {
     // 3. MANAGE: Audio pipeline streams per socket connection 
     let audioQueue = []; 
     let isTranscribing = false; 
-    let serverSeq = 1; // Explicit state sequence index tracking
+    let serverSeq = 1; 
 
     // Async generator function to pipe chunks into AWS SDK safely 
     async function* audioStreamGenerator() { 
@@ -58,7 +58,6 @@ wss.on('connection', (ws) => {
                 const chunk = audioQueue.shift(); 
                 yield { AudioEvent: { AudioChunk: chunk } }; 
             } else { 
-                // Wait 20ms before checking for new audio packets to prevent loop blocking 
                 await new Promise(resolve => setTimeout(resolve, 20)); 
             } 
         } 
@@ -90,7 +89,7 @@ wss.on('connection', (ws) => {
                             const alternatives = result.Alternatives;
                             if (alternatives && alternatives.length > 0) {
                                 const channelId = result.ChannelId || "Unknown";
-                                console.log(`📝 [Transcription - Channel ${channelId}]: ${alternatives[0].Transcript}`); 
+                                console.log(`📝 [Transcription - Channel ${channelId}]: ${alternatives.Transcript}`); 
                             }
                         } 
                     }); 
@@ -113,25 +112,23 @@ wss.on('connection', (ws) => {
                 
                 // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" 
                 if (request.type === 'open') { 
+                    // FIX: Dynamically extract and mirror the parameter block sent by Genesys.
+                    // This preserves unique track IDs, channel counts, and rates required for compliance.
+                    const incomingParams = request.parameters || {};
+
                     const response = { 
                         version: request.version, 
                         type: 'opened', 
-                        seq: serverSeq++, // FIX: Dynamically increment the sequence counter
+                        seq: serverSeq++, 
                         clientseq: request.seq, 
                         id: request.id, 
-                        parameters: { 
-                            startPaused: false, 
-                            media: [ 
-                                { type: 'audio', format: 'PCMU', channels: ['external', 'internal'], rate: 8000 } 
-                            ] 
-                        } 
+                        parameters: incomingParams 
                     }; 
+                    
                     console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
                     ws.send(JSON.stringify(response)); 
                     console.log(`[Handshake OK] ID: ${request.id}`); 
                     
-                    // FIX: Process the AWS engine call inside a separate event frame 
-                    // This allows your server to flush the text frames back to Genesys instantly
                     setTimeout(() => {
                         startAwsTranscription(); 
                     }, 0);
