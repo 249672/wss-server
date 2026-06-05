@@ -9,31 +9,27 @@ const port = process.env.PORT || 8080;
 // 2. ADDED: Initialize AWS Client (uses Render Environment Variables) 
 const transcribeClient = new TranscribeStreamingClient({ region: process.env.AWS_REGION || 'us-east-1' }); 
 
-// --- Real-time Mu-Law (PCMU) to Linear 16 PCM conversion table lookup --- 
-const MU_LAW_TO_PCM = new Int16Array(256); 
-for (let i = 0; i < 256; i++) { 
-    let sign = (i & 0x80) ? -1 : 1; 
-    let mask = ~i; 
-    let exponent = (mask >> 4) & 0x07; 
-    let leadingDigit = (mask & 0x0F) + 33; 
-    let value = (leadingDigit << (exponent + 1)) - 33; 
+// --- Real-time Mu-Law (PCMU) to Linear 16 PCM conversion table lookup ---
+const MU_LAW_TO_PCM = new Int16Array(256);
+for (let i = 0; i < 256; i++) {
+    let sign = (i & 0x80) ? -1 : 1;
+    let mask = ~i;
+    let exponent = (mask >> 4) & 0x07;
+    let leadingDigit = (mask & 0x0F) + 33;
+    let value = (leadingDigit << (exponent + 1)) - 33;
     MU_LAW_TO_PCM[i] = sign * value << 2; 
-} 
+}
 
-function decodeAndMixDualChannelToMonoPCM(muLawBuffer) {
-    const pcmBuffer = Buffer.alloc(muLawBuffer.length);
-    let outputSampleIndex = 0;
-
-    for (let i = 0; i < muLawBuffer.length; i += 2) {
-        const sample1 = MU_LAW_TO_PCM[muLawBuffer[i]];
-        const sample2 = MU_LAW_TO_PCM[muLawBuffer[i + 1]];
-        const mixedMonoSample = Math.floor((sample1 + sample2) / 2);
-        pcmBuffer.writeInt16LE(mixedMonoSample, outputSampleIndex * 2);
-        outputSampleIndex++;
+// Helper function to decode PCMU payload into standard 16-bit PCM bytes
+function decodeMuLawToPCM(muLawBuffer) {
+    const pcmBuffer = Buffer.alloc(muLawBuffer.length * 2);
+    for (let i = 0; i < muLawBuffer.length; i++) {
+        const sample = MU_LAW_TO_PCM[muLawBuffer[i]];
+        pcmBuffer.writeInt16LE(sample, i * 2);
     }
     return pcmBuffer;
 }
-// ------------------------------------------------------------------------ 
+// ------------------------------------------------------------------------
 
 // 1. Maintain the Render Infrastructure Web Router Health Check 
 const server = http.createServer((req, res) => { 
@@ -54,7 +50,6 @@ wss.on('connection', (ws) => {
     // 3. ADDED: Manage audio pipeline streams per socket connection 
     let audioQueue = []; 
     let isTranscribing = false; 
-    let serverSeq = 0; 
 
     // Async generator function to pipe chunks into AWS SDK safely 
     async function* audioStreamGenerator() { 
@@ -79,7 +74,7 @@ wss.on('connection', (ws) => {
             const command = new StartStreamTranscriptionCommand({ 
                 LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
-                MediaEncoding: 'pcm', 
+                MediaEncoding: 'pcm', // For raw audio pipelines 
                 AudioStream: audioStreamGenerator() 
             }); 
             
@@ -90,10 +85,10 @@ wss.on('connection', (ws) => {
                 if (event.TranscriptEvent?.Transcript?.Results) { 
                     event.TranscriptEvent.Transcript.Results.forEach(result => { 
                         if (!result.IsPartial) { 
-                            const alternatives = result.Alternatives; 
-                            if (alternatives && alternatives.length > 0) { 
+                            const alternatives = result.Alternatives;
+                            if (alternatives && alternatives.length > 0) {
                                 console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
-                            } 
+                            }
                         } 
                     }); 
                 } 
@@ -105,27 +100,31 @@ wss.on('connection', (ws) => {
     } 
 
     ws.on('message', (message) => { 
-        const textCheck = message.toString().trim(); 
-        
-        // STRICT HANDSHAKE INTERACTION OVERRIDE 
-        if (textCheck.startsWith('{') || textCheck.includes('"type"') || textCheck.includes('"version"')) { 
-            try { 
+        // Convert input directly to string to test if it contains handshake text
+        const textCheck = message.toString().trim();
+
+        // FIX: STRICT HANDSHAKE INTERACTION OVERRIDE
+        // If it looks like JSON metadata, intercept it immediately and bypass the audio loop
+        if (textCheck.startsWith('{') || textCheck.includes('"type"') || textCheck.includes('"version"')) {
+            try {
                 const request = JSON.parse(textCheck); 
                 console.log(`📨 Received Valid Handshake Frame Type: "${request.type}"`); 
                 
                 // STEP A: MATCH SCRIPT EXACTLY TO THE CHOSEN "OPEN" 
                 if (request.type === 'open') { 
-                    // FIX: Direct mirroring of request metadata parameters blocks 
-                    // This retains all original media trackers and avoids strict schema validation flags
                     const response = { 
                         version: request.version, 
                         type: 'opened', 
-                        seq: serverSeq++, 
+                        seq: 1, 
                         clientseq: request.seq, 
                         id: request.id, 
-                        parameters: request.parameters || {} 
+                        parameters: { 
+                            startPaused: false, 
+                            media: [ 
+                                { type: 'audio', format: 'PCMU', channels: ['external', 'internal'], rate: 8000 } 
+                            ] 
+                        } 
                     }; 
-                    
                     console.log("Full Genesys Response Payload:", JSON.stringify(response, null, 2)); 
                     ws.send(JSON.stringify(response)); 
                     console.log(`[Handshake OK] ID: ${request.id}`); 
@@ -133,35 +132,38 @@ wss.on('connection', (ws) => {
                     // Trigger the translation pipeline right when connection opens 
                     startAwsTranscription(); 
                 } 
+                // STEP A-2: SPECS PAUSED HANDSHAKE 
                 else if (request.type === 'paused') { 
-                    const response = { version: request.version, type: 'paused', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
+                    const response = { version: request.version, type: 'paused', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
+                // STEP A-3: SPECS RESUMED HANDSHAKE 
                 else if (request.type === 'resumed') { 
-                    const response = { version: request.version, type: 'resumed', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
+                    const response = { version: request.version, type: 'resumed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
+                // STEP B: SPECS CLOSE SESSION CLEANUP HANDSHAKE 
                 else if (request.type === 'close') { 
-                    const response = { version: request.version, type: 'closed', seq: serverSeq++, clientseq: request.seq, id: request.id, parameters: {} }; 
+                    const response = { version: request.version, type: 'closed', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id, parameters: {} }; 
                     ws.send(JSON.stringify(response)); 
-                    setImmediate(() => { 
-                        ws.close(1000); 
-                    }); 
+                    setImmediate(() => { ws.close(1000); }); 
                 } 
+                // STEP C: KEEPALIVE INFRASTRUCTURE LIFELINE 
                 else if (request.type === 'ping') { 
-                    const response = { version: request.version, type: 'pong', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
+                    const response = { version: request.version, type: 'pong', seq: (request.serverseq || 0) + 1, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
-                return; 
-            } catch (err) { 
-                console.error('⚠️ Intercept failed to evaluate schema object:', err.message); 
-            } 
-        } 
-        
-        // 4. PROCESS STREAMING AUDIO
-        const rawMuLaw = Buffer.from(message); 
-        const monoPCM = decodeAndMixDualChannelToMonoPCM(rawMuLaw); 
-        audioQueue.push(monoPCM); 
+                return; // Structural check processed completely
+            } catch (err) {
+                console.error('⚠️ Intercept failed to evaluate schema object:', err.message);
+            }
+        }
+
+        // 4. ADDED: If it's not a text handshake, treat it as a raw binary audio chunk
+        console.log(`🎙️ [Streaming Media] Receiving raw audio chunk: ${message.length} bytes`); 
+        const rawMuLaw = Buffer.from(message);
+        const linearPCM = decodeMuLawToPCM(rawMuLaw);
+        audioQueue.push(linearPCM); 
     }); 
 
     ws.on('error', (error) => { 
