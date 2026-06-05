@@ -51,7 +51,7 @@ wss.on('connection', (ws) => {
             const command = new StartStreamTranscriptionCommand({ 
                 LanguageCode: 'en-US', 
                 MediaSampleRateHertz: 8000, 
-                MediaEncoding: 'g711-mu', // Matches Genesys PCMU
+                MediaEncoding: 'g711-ulaw', // FIX: Changed 'g711-mu' to 'g711-ulaw' to pass AWS validation
                 AudioStream: audioStreamGenerator() 
             }); 
             
