@@ -20,31 +20,22 @@ for (let i = 0; i < 256; i++) {
     MU_LAW_TO_PCM[i] = sign * value << 2; 
 } 
 
-// FIX: Hardened Real-Time Audio Mixer with Array-Bound Protection
 function decodeAndMixDualChannelToMonoPCM(muLawBuffer) {
-    // Mono output has exactly half the number of samples, but each sample is 16-bit (2 bytes)
-    // Therefore, allocate a buffer size that matches the input buffer perfectly
     const pcmBuffer = Buffer.alloc(muLawBuffer.length);
     let outputSampleIndex = 0;
 
-    // Strict boundary loop control guard ensuring i + 1 never points out-of-bounds
     for (let i = 0; i < muLawBuffer.length - 1; i += 2) {
         const sample1 = MU_LAW_TO_PCM[muLawBuffer[i]];
         const sample2 = MU_LAW_TO_PCM[muLawBuffer[i + 1]];
         
-        // Prevent undefined/NaN addition errors if a frame is corrupt
         const s1 = isNaN(sample1) ? 0 : sample1;
         const s2 = isNaN(sample2) ? 0 : sample2;
 
-        // Take the mathematical average of both speaker channels
         const mixedMonoSample = Math.floor((s1 + s2) / 2);
         
-        // Write the single mixed sample into the mono stream
         pcmBuffer.writeInt16LE(mixedMonoSample, outputSampleIndex * 2);
         outputSampleIndex++;
     }
-    
-    // Slice off any trailing unwritten bytes to prevent sending zero-padded static to AWS
     return pcmBuffer.subarray(0, outputSampleIndex * 2);
 }
 // ------------------------------------------------------------------------ 
@@ -104,7 +95,6 @@ wss.on('connection', (ws) => {
                 if (event.TranscriptEvent?.Transcript?.Results) { 
                     event.TranscriptEvent.Transcript.Results.forEach(result => { 
                         if (!result.IsPartial) { 
-                            // Access the array structure safely using standard array indices
                             const alternatives = result.Alternatives; 
                             if (alternatives && alternatives.length > 0) { 
                                 console.log(`📝 [Transcription]: ${alternatives[0].Transcript}`); 
@@ -119,11 +109,20 @@ wss.on('connection', (ws) => {
         } 
     } 
 
-    ws.on('message', (message) => { 
+    ws.on('message', (message, isBinary) => { 
+        // FIX: Strict type-guard filtering
+        // If the websocket layer flags it as binary or it's a raw Buffer block, route straight to audio router
+        if (isBinary || Buffer.isBuffer(message)) {
+            const rawMuLaw = Buffer.from(message); 
+            const monoPCM = decodeAndMixDualChannelToMonoPCM(rawMuLaw); 
+            audioQueue.push(monoPCM); 
+            return;
+        }
+
         const textCheck = message.toString().trim(); 
         
-        // STRICT HANDSHAKE INTERACTION OVERRIDE 
-        if (textCheck.startsWith('{') || textCheck.includes('"type"') || textCheck.includes('"version"')) { 
+        // Ensure the string payload is valid JSON before attempting to parse it
+        if (textCheck.startsWith('{') && textCheck.endsWith('}')) { 
             try { 
                 const request = JSON.parse(textCheck); 
                 console.log(`📨 Received Valid Handshake Frame Type: "${request.type}"`); 
@@ -165,13 +164,15 @@ wss.on('connection', (ws) => {
                     const response = { version: request.version, type: 'pong', seq: serverSeq++, clientseq: request.seq, id: request.id }; 
                     ws.send(JSON.stringify(response)); 
                 } 
-                return; 
+                return; // JSON text frame handled completely
             } catch (err) { 
-                console.error('⚠️ Intercept failed to evaluate schema object:', err.message); 
+                // Fallback: If JSON parsing fails due to trailing audio data inside text strings, mix it down as audio data instead
+                console.log("⚠️ Text frame format boundary mismatch. Routing packet to conversion engine.");
             } 
         } 
         
-        // 4. PROCESS STREAMING AUDIO
+        // 4. AUDIO CHUNKS ROUTER FALLBACK
+        console.log(`🎙️ [Streaming Media] Receiving fallback raw audio chunk: ${message.length} bytes`); 
         const rawMuLaw = Buffer.from(message); 
         const monoPCM = decodeAndMixDualChannelToMonoPCM(rawMuLaw); 
         audioQueue.push(monoPCM); 
